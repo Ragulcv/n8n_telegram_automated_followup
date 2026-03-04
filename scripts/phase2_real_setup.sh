@@ -116,11 +116,29 @@ BRIDGE_API_KEY="$(get_env BRIDGE_API_KEY)"
 BRIDGE_PORT="${BRIDGE_PORT:-18080}"
 
 echo "[4/5] Checking bridge health..."
-curl -fsS "http://localhost:${BRIDGE_PORT}/health" >/dev/null
+for i in {1..20}; do
+  if curl -fsS "http://localhost:${BRIDGE_PORT}/health" >/dev/null 2>&1; then
+    break
+  fi
+  if [[ "$i" -eq 20 ]]; then
+    echo "[FAIL] Bridge health did not become ready in time."
+    exit 1
+  fi
+  sleep 1
+done
 echo "[PASS] Bridge health OK"
 
 echo "[5/5] Checking authenticated Telegram account health..."
-curl -fsS -H "x-api-key: ${BRIDGE_API_KEY}" "http://localhost:${BRIDGE_PORT}/v1/account/health"
+for i in {1..20}; do
+  if curl -fsS -H "x-api-key: ${BRIDGE_API_KEY}" "http://localhost:${BRIDGE_PORT}/v1/account/health"; then
+    break
+  fi
+  if [[ "$i" -eq 20 ]]; then
+    echo "[FAIL] Telegram account health check failed after retries."
+    exit 1
+  fi
+  sleep 1
+done
 echo ""
 echo "[PASS] Real mode setup completed."
 echo ""
