@@ -22,6 +22,22 @@ curl -H "x-api-key: $BRIDGE_API_KEY" http://localhost:8080/v1/account/health
    - Stage D (after day-1 gate): 01 + 02 + 03 + 04 + 05 + 08
    - Keep OFF in phase-2: 06, 07
 
+## Phase-3 ops activation
+
+After phase-2 stability is confirmed, enable ops bot and reporting:
+
+1. Set real values in `.env`:
+   - `OPS_BOT_TOKEN`
+   - `OPS_CHAT_ID`
+2. Run:
+   ```bash
+   ./scripts/phase3_ops_setup.sh
+   ```
+3. Confirm active workflows include `06 Human Approval` and `07 Daily Reporting`.
+4. In ops chat, run `/claim <task_id>` on a fresh approval row and verify:
+   - `Approvals` gets audit append row
+   - `DNC` appends if `/dnc` or `/not_interested`
+
 ## Safety checks
 
 - Start phase-2 with `DAILY_SEND_CAP=10`.

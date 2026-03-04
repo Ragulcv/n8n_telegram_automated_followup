@@ -1,4 +1,4 @@
-.PHONY: up down logs bridge-test lint bootstrap-sheets prepare-env preflight test-mock import-workflows phase2-real-setup phase2-stage-a phase2-stage-b phase2-stage-c phase2-stage-d phase2-gate phase2-status
+.PHONY: up down logs bridge-test lint bootstrap-sheets prepare-env preflight test-mock import-workflows phase2-real-setup phase2-stage-a phase2-stage-b phase2-stage-c phase2-stage-d phase2-gate phase2-status phase3-ops-setup
 
 up:
 	docker compose up -d --build
@@ -50,3 +50,6 @@ phase2-gate:
 
 phase2-status:
 	./scripts/phase2_stage_activate.sh --stage status
+
+phase3-ops-setup:
+	./scripts/phase3_ops_setup.sh

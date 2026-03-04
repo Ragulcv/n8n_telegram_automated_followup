@@ -108,6 +108,28 @@ Phase-2 defaults enforced by setup script:
 - `GSHEET_ENABLED=true`
 - `TELEGRAM_MOCK_MODE=false` (after real creds are provided)
 
+## Phase 3 (ops bot + approval and reporting live)
+
+Once phase-2 is stable and your Google Sheets are updating correctly, set these in `.env`:
+
+- `OPS_BOT_TOKEN=<real bot token from BotFather>`
+- `OPS_CHAT_ID=<real group/chat id where bot is added>`
+
+Then run:
+
+```bash
+cd "/Users/ragul/Applications/codex projects/n8n project for telegram outreach "
+make phase3-ops-setup
+```
+
+What this command does:
+- Creates/updates Telegram bot credential in n8n
+- Binds Telegram credential for workflows `05`, `06`, `07`, `08`
+- Forces `05` to notify ops group when `OPS_NOTIFY_ENABLED=true`
+- Sets `OPS_NOTIFY_ENABLED=true` in `.env`
+- Recreates containers and activates workflows `01..08`
+- Sends a test bot message to your ops chat
+
 ## Exact testing flow (beginner)
 
 1. Keep `TELEGRAM_MOCK_MODE=true`.
