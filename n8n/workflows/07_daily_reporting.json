@@ -1,0 +1,273 @@
+{
+  "name": "07 Daily Reporting",
+  "id": "wf_07_daily_reporting",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 20
+            }
+          ]
+        }
+      },
+      "id": "schedule-daily",
+      "name": "Daily 20:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        220,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "mode": "id",
+          "value": "={{$env.GSHEET_ID}}"
+        },
+        "sheetName": {
+          "mode": "name",
+          "value": "MessageLog"
+        },
+        "options": {
+          "returnAll": true
+        }
+      },
+      "id": "read-log",
+      "name": "Read MessageLog",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        460,
+        260
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "mode": "id",
+          "value": "={{$env.GSHEET_ID}}"
+        },
+        "sheetName": {
+          "mode": "name",
+          "value": "Replies"
+        },
+        "options": {
+          "returnAll": true
+        }
+      },
+      "id": "read-replies",
+      "name": "Read Replies",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        700,
+        260
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "mode": "id",
+          "value": "={{$env.GSHEET_ID}}"
+        },
+        "sheetName": {
+          "mode": "name",
+          "value": "DNC"
+        },
+        "options": {
+          "returnAll": true
+        }
+      },
+      "id": "read-dnc",
+      "name": "Read DNC",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        940,
+        260
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const logs = $items('Read MessageLog', 0, 0).map(i => i.json);\nconst replies = $items('Read Replies', 0, 0).map(i => i.json);\nconst dnc = items.map(i => i.json);\nconst today = new Date().toISOString().slice(0, 10);\nconst kpis = new Map();\nfunction getKpi(campaignId) {\n  if (!kpis.has(campaignId)) {\n    kpis.set(campaignId, {\n      date: today,\n      campaign_id: campaignId,\n      sent_count: 0,\n      reply_count: 0,\n      interested_count: 0,\n      dnc_count: 0,\n      followup_count: 0,\n      fail_count: 0\n    });\n  }\n  return kpis.get(campaignId);\n}\nfor (const log of logs) {\n  const key = log.campaign_id || 'unknown';\n  const row = getKpi(key);\n  if (String(log.direction || '') === 'outbound' && String(log.status || '') === 'sent') row.sent_count += 1;\n  if (String(log.message_type || '') === 'follow_up') row.followup_count += 1;\n  if (String(log.status || '') === 'failed') row.fail_count += 1;\n}\nfor (const reply of replies) {\n  const key = reply.campaign_id || 'unknown';\n  const row = getKpi(key);\n  row.reply_count += 1;\n  if (String(reply.intent || '') === 'Interested') row.interested_count += 1;\n}\nfor (const row of dnc) {\n  const key = row.campaign_id || 'unknown';\n  const target = getKpi(key);\n  target.dnc_count += 1;\n}\nreturn Array.from(kpis.values()).map(v => ({ json: v }));"
+      },
+      "id": "aggregate-kpi",
+      "name": "Aggregate KPIs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1180,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "append",
+        "documentId": {
+          "mode": "id",
+          "value": "={{$env.GSHEET_ID}}"
+        },
+        "sheetName": {
+          "mode": "name",
+          "value": "DailyKPIs"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "date": "={{$json.date}}",
+            "campaign_id": "={{$json.campaign_id}}",
+            "sent_count": "={{$json.sent_count}}",
+            "reply_count": "={{$json.reply_count}}",
+            "interested_count": "={{$json.interested_count}}",
+            "dnc_count": "={{$json.dnc_count}}",
+            "followup_count": "={{$json.followup_count}}",
+            "fail_count": "={{$json.fail_count}}"
+          },
+          "schema": []
+        }
+      },
+      "id": "append-dailykpi",
+      "name": "Append DailyKPIs",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1420,
+        260
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{$env.OPS_CHAT_ID}}",
+        "text": "={{'Daily Outreach KPI Snapshot\n' + $items().map(i => `${i.json.campaign_id}: sent ${i.json.sent_count}, replies ${i.json.reply_count}, interested ${i.json.interested_count}, dnc ${i.json.dnc_count}, fail ${i.json.fail_count}`).join('\n')}}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "send-digest",
+      "name": "Send KPI Digest",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1660,
+        260
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_ME",
+          "name": "Ops Telegram Bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Daily 20:00": {
+      "main": [
+        [
+          {
+            "node": "Read MessageLog",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read MessageLog": {
+      "main": [
+        [
+          {
+            "node": "Read Replies",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Replies": {
+      "main": [
+        [
+          {
+            "node": "Read DNC",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read DNC": {
+      "main": [
+        [
+          {
+            "node": "Aggregate KPIs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate KPIs": {
+      "main": [
+        [
+          {
+            "node": "Append DailyKPIs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append DailyKPIs": {
+      "main": [
+        [
+          {
+            "node": "Send KPI Digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

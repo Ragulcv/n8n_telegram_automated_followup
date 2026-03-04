@@ -1,0 +1,9 @@
+tab_name,headers
+Campaigns,"campaign_id,name,type,template_pack,status,start_date,sequence_config,segment_filter"
+Leads,"lead_id,telegram_user_id,username,phone_hash,name,company,role,timezone,stage,owner,last_contacted_at,next_followup_at,suppression_reason"
+Queue,"queue_id,campaign_id,lead_id,sequence_step,due_at,status,attempt_count,last_error"
+MessageLog,"log_id,campaign_id,lead_id,direction,message_type,content,provider_message_id,status,timestamp"
+Replies,"reply_id,lead_id,campaign_id,inbound_text,intent,priority_flag,timestamp"
+Approvals,"task_id,lead_id,campaign_id,draft_text,status,claimed_by,created_at,sla_due_at,resolution"
+DNC,"suppression_id,lead_id,telegram_user_id,reason,source,created_at,scope"
+DailyKPIs,"date,campaign_id,sent_count,reply_count,interested_count,dnc_count,followup_count,fail_count"

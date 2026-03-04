@@ -1,0 +1,284 @@
+{
+  "name": "02 Lead Qualification + Enrichment",
+  "id": "wf_02_lead_qualification_enrichment",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      },
+      "id": "schedule-qualify",
+      "name": "Every 15 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "mode": "id",
+          "value": "={{$env.GSHEET_ID}}"
+        },
+        "sheetName": {
+          "mode": "name",
+          "value": "Queue"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "status",
+              "lookupValue": "Pending"
+            },
+            {
+              "lookupColumn": "sequence_step",
+              "lookupValue": "0"
+            }
+          ]
+        },
+        "options": {
+          "returnAll": true
+        }
+      },
+      "id": "read-pending-seed",
+      "name": "Read Pending Seed Queue",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        460,
+        300
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "mode": "id",
+          "value": "={{$env.GSHEET_ID}}"
+        },
+        "sheetName": {
+          "mode": "name",
+          "value": "Leads"
+        },
+        "options": {
+          "returnAll": true
+        }
+      },
+      "id": "read-leads-table",
+      "name": "Read Leads Table",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        700,
+        300
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const queueRows = $items('Read Pending Seed Queue', 0, 0).map(i => i.json);\nconst leads = items.map(i => i.json);\nconst payload = [];\nfor (const row of queueRows) {\n  const lead = leads.find(l => String(l.lead_id) === String(row.lead_id));\n  if (!lead) continue;\n  payload.push({\n    campaign_id: row.campaign_id,\n    lead_id: row.lead_id,\n    telegram_user_id: lead.telegram_user_id || '',\n    username: lead.username || ''\n  });\n}\nreturn payload.map(p => ({ json: p }));"
+      },
+      "id": "build-resolve-requests",
+      "name": "Build Resolve Requests",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        940,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.BRIDGE_BASE_URL}}/v1/contacts/resolve",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{$env.BRIDGE_API_KEY}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "campaign_id",
+              "value": "={{$json.campaign_id}}"
+            },
+            {
+              "name": "lead_id",
+              "value": "={{$json.lead_id}}"
+            },
+            {
+              "name": "telegram_user_id",
+              "value": "={{$json.telegram_user_id}}"
+            },
+            {
+              "name": "username",
+              "value": "={{$json.username}}"
+            }
+          ]
+        }
+      },
+      "id": "resolve-contact",
+      "name": "Resolve Contact in Bridge",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1180,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return items.map((item) => {\n  const resolved = item.json.resolved === true;\n  return {\n    json: {\n      lead_id: item.json.lead_id,\n      campaign_id: item.json.campaign_id,\n      stage: resolved ? 'New' : 'DNC/Closed',\n      suppression_reason: resolved ? '' : 'INVALID_TELEGRAM_CONTACT',\n      telegram_user_id: item.json.telegram_user_id || '',\n      username: item.json.username || ''\n    }\n  };\n});"
+      },
+      "id": "prepare-lead-updates",
+      "name": "Prepare Lead Updates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1420,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "append",
+        "documentId": {
+          "mode": "id",
+          "value": "={{$env.GSHEET_ID}}"
+        },
+        "sheetName": {
+          "mode": "name",
+          "value": "Leads"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "lead_id": "={{$json.lead_id}}",
+            "telegram_user_id": "={{$json.telegram_user_id}}",
+            "username": "={{$json.username}}",
+            "stage": "={{$json.stage}}",
+            "suppression_reason": "={{$json.suppression_reason}}"
+          },
+          "schema": []
+        }
+      },
+      "id": "append-lead-updates",
+      "name": "Append Lead Update Log",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1660,
+        300
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME",
+          "name": "Google Sheets"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every 15 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Read Pending Seed Queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Pending Seed Queue": {
+      "main": [
+        [
+          {
+            "node": "Read Leads Table",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Leads Table": {
+      "main": [
+        [
+          {
+            "node": "Build Resolve Requests",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Resolve Requests": {
+      "main": [
+        [
+          {
+            "node": "Resolve Contact in Bridge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resolve Contact in Bridge": {
+      "main": [
+        [
+          {
+            "node": "Prepare Lead Updates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Lead Updates": {
+      "main": [
+        [
+          {
+            "node": "Append Lead Update Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

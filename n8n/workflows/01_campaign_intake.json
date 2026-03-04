@@ -1,0 +1,220 @@
+{
+  "name": "01 Campaign Intake",
+  "id": "wf_01_campaign_intake",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 10
+            }
+          ]
+        }
+      },
+      "id": "schedule-1",
+      "name": "Every 10 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        220,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "mode": "id",
+          "value": "={{$env.GSHEET_ID}}"
+        },
+        "sheetName": {
+          "mode": "name",
+          "value": "Campaigns"
+        },
+        "options": {
+          "returnAll": true
+        }
+      },
+      "id": "gs-read-campaigns",
+      "name": "Read Campaigns",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        460,
+        280
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const active = items.filter((item) => String(item.json.status || '').toLowerCase() === 'active');\nreturn active.map((item) => ({ json: item.json }));"
+      },
+      "id": "code-active-campaigns",
+      "name": "Filter Active Campaigns",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        700,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "mode": "id",
+          "value": "={{$env.GSHEET_ID}}"
+        },
+        "sheetName": {
+          "mode": "name",
+          "value": "Leads"
+        },
+        "options": {
+          "returnAll": true
+        }
+      },
+      "id": "gs-read-leads",
+      "name": "Read Leads",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        940,
+        280
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const campaigns = $items('Filter Active Campaigns', 0, 0).map(i => i.json);\nconst leads = items.map(i => i.json);\nconst now = new Date().toISOString();\nconst queueRows = [];\nfor (const campaign of campaigns) {\n  const type = String(campaign.type || 'cold').toLowerCase();\n  const segment = String(campaign.segment_filter || '').trim();\n  const eligible = leads.filter((lead) => {\n    const stage = String(lead.stage || 'New');\n    const suppressed = String(lead.suppression_reason || '').trim().length > 0;\n    if (suppressed) return false;\n    if (segment && !String(lead.company || '').toLowerCase().includes(segment.toLowerCase())) return false;\n    if (!lead.telegram_user_id && !lead.username) return false;\n    if (type === 'warm' && stage === 'New') return false;\n    return stage === 'New' || stage === 'Not Now';\n  });\n  for (const lead of eligible) {\n    const queueId = `${campaign.campaign_id}-${lead.lead_id}-s0`;\n    queueRows.push({\n      queue_id: queueId,\n      campaign_id: campaign.campaign_id,\n      lead_id: lead.lead_id,\n      sequence_step: 0,\n      due_at: now,\n      status: 'Pending',\n      attempt_count: 0,\n      last_error: ''\n    });\n  }\n}\nreturn queueRows.map(row => ({ json: row }));"
+      },
+      "id": "code-prepare-queue",
+      "name": "Build Queue Rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1180,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "append",
+        "documentId": {
+          "mode": "id",
+          "value": "={{$env.GSHEET_ID}}"
+        },
+        "sheetName": {
+          "mode": "name",
+          "value": "Queue"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "queue_id": "={{$json.queue_id}}",
+            "campaign_id": "={{$json.campaign_id}}",
+            "lead_id": "={{$json.lead_id}}",
+            "sequence_step": "={{$json.sequence_step}}",
+            "due_at": "={{$json.due_at}}",
+            "status": "={{$json.status}}",
+            "attempt_count": "={{$json.attempt_count}}",
+            "last_error": "={{$json.last_error}}"
+          },
+          "schema": []
+        }
+      },
+      "id": "gs-append-queue",
+      "name": "Append Queue",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1420,
+        280
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME",
+          "name": "Google Sheets"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every 10 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Read Campaigns",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Campaigns": {
+      "main": [
+        [
+          {
+            "node": "Filter Active Campaigns",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Active Campaigns": {
+      "main": [
+        [
+          {
+            "node": "Read Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Leads": {
+      "main": [
+        [
+          {
+            "node": "Build Queue Rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Queue Rows": {
+      "main": [
+        [
+          {
+            "node": "Append Queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

@@ -1,0 +1,271 @@
+{
+  "name": "08 Reconciliation + Exceptions",
+  "id": "wf_08_reconciliation_exceptions",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "schedule-hourly",
+      "name": "Hourly",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        220,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "mode": "id",
+          "value": "={{$env.GSHEET_ID}}"
+        },
+        "sheetName": {
+          "mode": "name",
+          "value": "Queue"
+        },
+        "options": {
+          "returnAll": true
+        }
+      },
+      "id": "read-queue",
+      "name": "Read Queue",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        460,
+        280
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "mode": "id",
+          "value": "={{$env.GSHEET_ID}}"
+        },
+        "sheetName": {
+          "mode": "name",
+          "value": "MessageLog"
+        },
+        "options": {
+          "returnAll": true
+        }
+      },
+      "id": "read-log",
+      "name": "Read MessageLog",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        700,
+        280
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const queue = $items('Read Queue', 0, 0).map(i => i.json);\nconst logs = items.map(i => i.json);\nconst now = Date.now();\nconst retryDelays = String($env.DELIVERY_RETRY_DELAYS || '120,600,1800').split(',').map(v => Number(v.trim()) * 1000);\nconst tasks = [];\nfor (const row of queue) {\n  const attempt = Number(row.attempt_count || 0);\n  const status = String(row.status || '');\n  const dueAt = new Date(row.due_at || 0).getTime();\n  const messageExists = logs.some(l => String(l.lead_id) === String(row.lead_id) && String(l.campaign_id) === String(row.campaign_id));\n  if (status === 'Pending' && now - dueAt > 2 * 60 * 60 * 1000 && !messageExists) {\n    tasks.push({ action: 'stale_pending', queue_id: row.queue_id, lead_id: row.lead_id, campaign_id: row.campaign_id, detail: 'Pending > 2h without delivery log' });\n  }\n  if (status === 'Failed' && attempt < 3) {\n    const delay = retryDelays[Math.min(attempt, retryDelays.length - 1)] || 1800000;\n    tasks.push({\n      action: 'retry',\n      queue_id: row.queue_id,\n      lead_id: row.lead_id,\n      campaign_id: row.campaign_id,\n      next_due_at: new Date(now + delay).toISOString(),\n      next_attempt: attempt + 1,\n      detail: row.last_error || 'Transient failure'\n    });\n  }\n  if (status === 'Failed' && attempt >= 3) {\n    tasks.push({ action: 'manual_exception', queue_id: row.queue_id, lead_id: row.lead_id, campaign_id: row.campaign_id, detail: row.last_error || 'Exhausted retries' });\n  }\n}\nreturn tasks.map(t => ({ json: t }));"
+      },
+      "id": "build-recon-tasks",
+      "name": "Build Reconciliation Tasks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        940,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.action}}",
+              "operation": "equals",
+              "value2": "retry"
+            }
+          ]
+        }
+      },
+      "id": "if-retry",
+      "name": "Retry Action?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1180,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "append",
+        "documentId": {
+          "mode": "id",
+          "value": "={{$env.GSHEET_ID}}"
+        },
+        "sheetName": {
+          "mode": "name",
+          "value": "Queue"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "queue_id": "={{$json.queue_id}}",
+            "campaign_id": "={{$json.campaign_id}}",
+            "lead_id": "={{$json.lead_id}}",
+            "sequence_step": "1",
+            "due_at": "={{$json.next_due_at}}",
+            "status": "Pending",
+            "attempt_count": "={{$json.next_attempt}}",
+            "last_error": "={{$json.detail}}"
+          },
+          "schema": []
+        }
+      },
+      "id": "append-retry-queue",
+      "name": "Append Retry Queue Row",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1420,
+        220
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{$env.OPS_CHAT_ID}}",
+        "text": "={{'Reconciliation alert: ' + $json.action + ' | lead=' + $json.lead_id + ' | campaign=' + $json.campaign_id + ' | detail=' + $json.detail}}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "send-alert",
+      "name": "Alert Ops",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1420,
+        360
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_ME",
+          "name": "Ops Telegram Bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Hourly": {
+      "main": [
+        [
+          {
+            "node": "Read Queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Queue": {
+      "main": [
+        [
+          {
+            "node": "Read MessageLog",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read MessageLog": {
+      "main": [
+        [
+          {
+            "node": "Build Reconciliation Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Reconciliation Tasks": {
+      "main": [
+        [
+          {
+            "node": "Retry Action?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retry Action?": {
+      "main": [
+        [
+          {
+            "node": "Append Retry Queue Row",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Alert Ops",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append Retry Queue Row": {
+      "main": [
+        [
+          {
+            "node": "Alert Ops",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

@@ -1,0 +1,339 @@
+{
+  "name": "03 Send Orchestrator",
+  "id": "wf_03_send_orchestrator",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "id": "schedule-send",
+      "name": "Every 5 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        220,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{$env.BRIDGE_BASE_URL}}/v1/account/health",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{$env.BRIDGE_API_KEY}}"
+            }
+          ]
+        }
+      },
+      "id": "bridge-health",
+      "name": "Check Bridge Health",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        460,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.connected}}",
+              "value2": true
+            }
+          ],
+          "number": [
+            {
+              "value1": "={{$json.daily_sent_count}}",
+              "operation": "smaller",
+              "value2": "={{$json.daily_send_cap}}"
+            }
+          ]
+        }
+      },
+      "id": "if-account-ready",
+      "name": "Account Ready?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        700,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "mode": "id",
+          "value": "={{$env.GSHEET_ID}}"
+        },
+        "sheetName": {
+          "mode": "name",
+          "value": "Queue"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "status",
+              "lookupValue": "Pending"
+            }
+          ]
+        },
+        "options": {
+          "returnAll": true
+        }
+      },
+      "id": "read-pending-queue",
+      "name": "Read Pending Queue",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        940,
+        220
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "mode": "id",
+          "value": "={{$env.GSHEET_ID}}"
+        },
+        "sheetName": {
+          "mode": "name",
+          "value": "Leads"
+        },
+        "options": {
+          "returnAll": true
+        }
+      },
+      "id": "read-leads",
+      "name": "Read Leads",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1180,
+        220
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const queue = $items('Read Pending Queue', 0, 0).map(i => i.json);\nconst leads = items.map(i => i.json);\nconst now = new Date();\nconst output = [];\nfor (const q of queue) {\n  const due = new Date(q.due_at || 0);\n  if (Number.isNaN(due.getTime()) || due > now) continue;\n  const lead = leads.find(l => String(l.lead_id) === String(q.lead_id));\n  if (!lead) continue;\n  if (String(lead.stage || '').toLowerCase() === 'dnc/closed') continue;\n  if (String(lead.suppression_reason || '').length > 0) continue;\n  const messageType = Number(q.sequence_step) === 0 ? 'cold_touch' : 'follow_up';\n  const template = messageType === 'cold_touch'\n    ? `Hi ${lead.name || 'there'}, quick note from ${$env.OUTREACH_SENDER_NAME || 'our team'}. Open to a short chat this week?`\n    : `Hi ${lead.name || 'there'}, circling back in case this is relevant for ${lead.company || 'your team'}.`;\n  output.push({\n    campaign_id: q.campaign_id,\n    lead_id: q.lead_id,\n    queue_id: q.queue_id,\n    destination: {\n      telegram_user_id: lead.telegram_user_id || '',\n      username: lead.username || ''\n    },\n    text: template,\n    idempotency_key: `${q.queue_id}-${q.attempt_count || 0}`,\n    metadata: {\n      sequence_step: Number(q.sequence_step || 0),\n      message_type: messageType,\n      campaign_type: 'cold'\n    }\n  });\n}\nreturn output.map(row => ({ json: row }));"
+      },
+      "id": "build-send-payload",
+      "name": "Build Send Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1420,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.BRIDGE_BASE_URL}}/v1/messages/send",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{$env.BRIDGE_API_KEY}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{$json}}"
+      },
+      "id": "bridge-send",
+      "name": "Send via Bridge",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1660,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return items.map((item) => {\n  const result = item.json.result || {};\n  const sent = String(result.status) === 'sent';\n  const timestamp = result.sent_at || new Date().toISOString();\n  return {\n    json: {\n      log_id: `${item.json.campaign_id}-${item.json.lead_id}-${timestamp}`,\n      campaign_id: item.json.campaign_id,\n      lead_id: item.json.lead_id,\n      direction: 'outbound',\n      message_type: 'sequence',\n      content: '',\n      provider_message_id: result.provider_message_id || '',\n      status: result.status || 'failed',\n      timestamp,\n      queue_status: sent ? 'Sent' : 'Failed'\n    }\n  };\n});"
+      },
+      "id": "prepare-log",
+      "name": "Prepare Message Log",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1900,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "append",
+        "documentId": {
+          "mode": "id",
+          "value": "={{$env.GSHEET_ID}}"
+        },
+        "sheetName": {
+          "mode": "name",
+          "value": "MessageLog"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "log_id": "={{$json.log_id}}",
+            "campaign_id": "={{$json.campaign_id}}",
+            "lead_id": "={{$json.lead_id}}",
+            "direction": "={{$json.direction}}",
+            "message_type": "={{$json.message_type}}",
+            "content": "={{$json.content}}",
+            "provider_message_id": "={{$json.provider_message_id}}",
+            "status": "={{$json.status}}",
+            "timestamp": "={{$json.timestamp}}"
+          },
+          "schema": []
+        }
+      },
+      "id": "append-log",
+      "name": "Append MessageLog",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2140,
+        220
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME",
+          "name": "Google Sheets"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every 5 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Check Bridge Health",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Bridge Health": {
+      "main": [
+        [
+          {
+            "node": "Account Ready?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Account Ready?": {
+      "main": [
+        [
+          {
+            "node": "Read Pending Queue",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Read Pending Queue": {
+      "main": [
+        [
+          {
+            "node": "Read Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Leads": {
+      "main": [
+        [
+          {
+            "node": "Build Send Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Send Payload": {
+      "main": [
+        [
+          {
+            "node": "Send via Bridge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send via Bridge": {
+      "main": [
+        [
+          {
+            "node": "Prepare Message Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Message Log": {
+      "main": [
+        [
+          {
+            "node": "Append MessageLog",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

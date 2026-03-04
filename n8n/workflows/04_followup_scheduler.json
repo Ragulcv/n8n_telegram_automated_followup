@@ -1,0 +1,284 @@
+{
+  "name": "04 Follow-Up Scheduler",
+  "id": "wf_04_followup_scheduler",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 30
+            }
+          ]
+        }
+      },
+      "id": "schedule-followup",
+      "name": "Every 30 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        220,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "mode": "id",
+          "value": "={{$env.GSHEET_ID}}"
+        },
+        "sheetName": {
+          "mode": "name",
+          "value": "Leads"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "stage",
+              "lookupValue": "Contacted"
+            }
+          ]
+        },
+        "options": {
+          "returnAll": true
+        }
+      },
+      "id": "read-contacted",
+      "name": "Read Contacted Leads",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        460,
+        280
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "mode": "id",
+          "value": "={{$env.GSHEET_ID}}"
+        },
+        "sheetName": {
+          "mode": "name",
+          "value": "Replies"
+        },
+        "options": {
+          "returnAll": true
+        }
+      },
+      "id": "read-replies",
+      "name": "Read Replies",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        700,
+        280
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "mode": "id",
+          "value": "={{$env.GSHEET_ID}}"
+        },
+        "sheetName": {
+          "mode": "name",
+          "value": "DNC"
+        },
+        "options": {
+          "returnAll": true
+        }
+      },
+      "id": "read-dnc",
+      "name": "Read DNC",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        940,
+        280
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const leads = $items('Read Contacted Leads', 0, 0).map(i => i.json);\nconst replies = $items('Read Replies', 0, 0).map(i => i.json);\nconst dnc = items.map(i => i.json);\nconst now = new Date();\nconst followups = [];\nfor (const lead of leads) {\n  const hasReply = replies.some(r => String(r.lead_id) === String(lead.lead_id));\n  const blocked = dnc.some(d => String(d.lead_id) === String(lead.lead_id) || String(d.telegram_user_id) === String(lead.telegram_user_id));\n  if (hasReply || blocked) continue;\n  const dueAt = new Date(lead.next_followup_at || 0);\n  if (Number.isNaN(dueAt.getTime()) || dueAt > now) continue;\n  const step = Number((lead.sequence_step || 0)) + 1;\n  if (step > 3) continue;\n  followups.push({\n    campaign_id: lead.campaign_id || 'unknown',\n    lead_id: lead.lead_id,\n    destination: { telegram_user_id: lead.telegram_user_id || '', username: lead.username || '' },\n    text: `Hi ${lead.name || 'there'}, just following up on my previous note. Happy to close the loop if this is not a priority.`,\n    idempotency_key: `${lead.lead_id}-f${step}-${now.toISOString()}`,\n    metadata: { sequence_step: step, message_type: 'follow_up', campaign_type: 'cold' }\n  });\n}\nreturn followups.map(f => ({ json: f }));"
+      },
+      "id": "build-followups",
+      "name": "Build Follow-up Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1180,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.BRIDGE_BASE_URL}}/v1/messages/send",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{$env.BRIDGE_API_KEY}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{$json}}"
+      },
+      "id": "send-followups",
+      "name": "Send Follow-up",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1420,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "append",
+        "documentId": {
+          "mode": "id",
+          "value": "={{$env.GSHEET_ID}}"
+        },
+        "sheetName": {
+          "mode": "name",
+          "value": "MessageLog"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "log_id": "={{$json.campaign_id + '-' + $json.lead_id + '-fu'}}",
+            "campaign_id": "={{$json.campaign_id}}",
+            "lead_id": "={{$json.lead_id}}",
+            "direction": "outbound",
+            "message_type": "follow_up",
+            "content": "={{$json.text || ''}}",
+            "provider_message_id": "={{$json.result.provider_message_id || ''}}",
+            "status": "={{$json.result.status || 'failed'}}",
+            "timestamp": "={{$json.result.sent_at || $now}}"
+          },
+          "schema": []
+        }
+      },
+      "id": "append-followup-log",
+      "name": "Append Follow-up Log",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1660,
+        280
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME",
+          "name": "Google Sheets"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every 30 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Read Contacted Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Contacted Leads": {
+      "main": [
+        [
+          {
+            "node": "Read Replies",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Replies": {
+      "main": [
+        [
+          {
+            "node": "Read DNC",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read DNC": {
+      "main": [
+        [
+          {
+            "node": "Build Follow-up Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Follow-up Payload": {
+      "main": [
+        [
+          {
+            "node": "Send Follow-up",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Follow-up": {
+      "main": [
+        [
+          {
+            "node": "Append Follow-up Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

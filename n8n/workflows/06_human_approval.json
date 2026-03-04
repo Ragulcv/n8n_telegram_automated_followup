@@ -1,0 +1,389 @@
+{
+  "name": "06 Human Approval",
+  "id": "wf_06_human_approval",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ]
+      },
+      "id": "telegram-trigger",
+      "name": "Ops Bot Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        220,
+        320
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_ME",
+          "name": "Ops Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const msg = $json.message || {};\nconst text = String(msg.text || '').trim();\nconst user = msg.from?.username || msg.from?.id || 'unknown';\nconst parts = text.split(' ');\nconst command = (parts[0] || '').toLowerCase();\nconst taskId = parts[1] || '';\nconst payload = { action: 'ignore', task_id: taskId, actor: String(user), edited_text: '' };\nif (command === '/claim') payload.action = 'claim';\nif (command === '/approve') payload.action = 'approve';\nif (command === '/approve_edit') { payload.action = 'approve_edit'; payload.edited_text = parts.slice(2).join(' '); }\nif (command === '/not_now') payload.action = 'not_now';\nif (command === '/not_interested') payload.action = 'not_interested';\nif (command === '/dnc') payload.action = 'dnc';\nreturn [{ json: payload }];"
+      },
+      "id": "parse-command",
+      "name": "Parse Approval Command",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "mode": "id",
+          "value": "={{$env.GSHEET_ID}}"
+        },
+        "sheetName": {
+          "mode": "name",
+          "value": "Approvals"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "task_id",
+              "lookupValue": "={{$json.task_id}}"
+            }
+          ]
+        },
+        "options": {
+          "returnAll": true
+        }
+      },
+      "id": "lookup-task",
+      "name": "Lookup Approval Task",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        700,
+        320
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const command = $items('Parse Approval Command', 0, 0)[0].json;\nconst task = items[0]?.json || {};\nif (!task.task_id) return [];\nconst next = { ...task, action: command.action, actor: command.actor, edited_text: command.edited_text || '' };\nif (next.action === 'claim') {\n  next.status = 'Claimed';\n  next.claimed_by = next.actor;\n  next.resolution = 'Claimed';\n}\nif (next.action === 'approve' || next.action === 'approve_edit') {\n  next.status = 'Approved';\n  next.resolution = next.action === 'approve_edit' ? 'Approved with edits' : 'Approved';\n  if (next.action === 'approve_edit' && next.edited_text) next.draft_text = next.edited_text;\n}\nif (next.action === 'not_now') {\n  next.status = 'Closed';\n  next.resolution = 'Not Now';\n}\nif (next.action === 'not_interested') {\n  next.status = 'Closed';\n  next.resolution = 'Not Interested';\n}\nif (next.action === 'dnc') {\n  next.status = 'Closed';\n  next.resolution = 'DNC';\n}\nnext.updated_at = new Date().toISOString();\nreturn [{ json: next }];"
+      },
+      "id": "resolve-action",
+      "name": "Resolve Task Action",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        940,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.action}}",
+              "operation": "in",
+              "value2": "approve,approve_edit"
+            }
+          ]
+        }
+      },
+      "id": "if-send-reply",
+      "name": "Should Send Reply?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1180,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.BRIDGE_BASE_URL}}/v1/messages/send",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{$env.BRIDGE_API_KEY}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\n  campaign_id: $json.campaign_id,\n  lead_id: $json.lead_id,\n  destination: { telegram_user_id: $json.telegram_user_id || '', username: $json.username || '' },\n  text: $json.draft_text,\n  idempotency_key: $json.task_id + '-approval',\n  metadata: { sequence_step: 99, message_type: 'human_approved_reply', campaign_type: 'cold' }\n} }}"
+      },
+      "id": "send-approved-reply",
+      "name": "Send Approved Reply",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1420,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.resolution}}",
+              "operation": "in",
+              "value2": "Not Interested,DNC"
+            }
+          ]
+        }
+      },
+      "id": "if-dnc",
+      "name": "Needs DNC Entry?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1420,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "append",
+        "documentId": {
+          "mode": "id",
+          "value": "={{$env.GSHEET_ID}}"
+        },
+        "sheetName": {
+          "mode": "name",
+          "value": "DNC"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "suppression_id": "={{$json.task_id + '-dnc'}}",
+            "lead_id": "={{$json.lead_id}}",
+            "telegram_user_id": "={{$json.telegram_user_id || ''}}",
+            "reason": "={{$json.resolution}}",
+            "source": "human_approval",
+            "created_at": "={{$now}}",
+            "scope": "global"
+          },
+          "schema": []
+        }
+      },
+      "id": "append-dnc",
+      "name": "Append DNC",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1660,
+        420
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "append",
+        "documentId": {
+          "mode": "id",
+          "value": "={{$env.GSHEET_ID}}"
+        },
+        "sheetName": {
+          "mode": "name",
+          "value": "Approvals"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "task_id": "={{$json.task_id}}",
+            "lead_id": "={{$json.lead_id}}",
+            "campaign_id": "={{$json.campaign_id}}",
+            "draft_text": "={{$json.draft_text}}",
+            "status": "={{$json.status}}",
+            "claimed_by": "={{$json.claimed_by || $json.actor}}",
+            "created_at": "={{$json.created_at}}",
+            "sla_due_at": "={{$json.sla_due_at}}",
+            "resolution": "={{$json.resolution}}"
+          },
+          "schema": []
+        }
+      },
+      "id": "append-approval-audit",
+      "name": "Append Approval Audit",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1660,
+        320
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{$env.OPS_CHAT_ID}}",
+        "text": "={{'Action processed: ' + $json.action + ' for task ' + $json.task_id + ' by ' + $json.actor}}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "confirm-action",
+      "name": "Confirm in Ops Group",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1900,
+        320
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_ME",
+          "name": "Ops Telegram Bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Ops Bot Trigger": {
+      "main": [
+        [
+          {
+            "node": "Parse Approval Command",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Approval Command": {
+      "main": [
+        [
+          {
+            "node": "Lookup Approval Task",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lookup Approval Task": {
+      "main": [
+        [
+          {
+            "node": "Resolve Task Action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resolve Task Action": {
+      "main": [
+        [
+          {
+            "node": "Should Send Reply?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Needs DNC Entry?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Append Approval Audit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should Send Reply?": {
+      "main": [
+        [
+          {
+            "node": "Send Approved Reply",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Needs DNC Entry?": {
+      "main": [
+        [
+          {
+            "node": "Append DNC",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Send Approved Reply": {
+      "main": [
+        [
+          {
+            "node": "Confirm in Ops Group",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append DNC": {
+      "main": [
+        [
+          {
+            "node": "Confirm in Ops Group",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append Approval Audit": {
+      "main": [
+        [
+          {
+            "node": "Confirm in Ops Group",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

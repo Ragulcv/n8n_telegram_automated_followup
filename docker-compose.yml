@@ -1,0 +1,69 @@
+services:
+  n8n:
+    image: n8nio/n8n:latest
+    restart: unless-stopped
+    ports:
+      - "${N8N_PORT:-5678}:5678"
+    env_file:
+      - .env
+    environment:
+      - N8N_HOST=${N8N_HOST:-localhost}
+      - N8N_PROTOCOL=${N8N_PROTOCOL:-http}
+      - N8N_PORT=5678
+      - N8N_EDITOR_BASE_URL=${N8N_EDITOR_BASE_URL:-http://localhost:5678}
+      - WEBHOOK_URL=${WEBHOOK_URL:-http://localhost:5678}
+      - GENERIC_TIMEZONE=${GENERIC_TIMEZONE:-Asia/Dubai}
+      - N8N_BASIC_AUTH_ACTIVE=${N8N_BASIC_AUTH_ACTIVE:-true}
+      - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER:-admin}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD:-change-me}
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+      - N8N_METRICS=true
+      - N8N_DIAGNOSTICS_ENABLED=false
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n/workflows:/workflows:ro
+      - ./docs:/docs:ro
+    depends_on:
+      - bridge
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+
+  bridge:
+    build:
+      context: ./bridge
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - BRIDGE_HOST=${BRIDGE_HOST:-0.0.0.0}
+      - BRIDGE_PORT=${BRIDGE_PORT:-8080}
+      - BRIDGE_ENV=${BRIDGE_ENV:-dev}
+      - BRIDGE_LOG_LEVEL=${BRIDGE_LOG_LEVEL:-INFO}
+      - BRIDGE_API_KEY=${BRIDGE_API_KEY}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - TELEGRAM_API_ID=${TELEGRAM_API_ID}
+      - TELEGRAM_API_HASH=${TELEGRAM_API_HASH}
+      - TELEGRAM_PHONE=${TELEGRAM_PHONE}
+      - TELEGRAM_SESSION_STRING=${TELEGRAM_SESSION_STRING}
+      - SESSION_ENCRYPTION_KEY=${SESSION_ENCRYPTION_KEY}
+      - TELEGRAM_MOCK_MODE=${TELEGRAM_MOCK_MODE:-true}
+      - OPS_BOT_TOKEN=${OPS_BOT_TOKEN}
+      - OPS_CHAT_ID=${OPS_CHAT_ID}
+      - N8N_EVENTS_WEBHOOK_URL=${N8N_EVENTS_WEBHOOK_URL:-http://n8n:5678/webhook/telegram/events}
+      - DAILY_SEND_CAP=${DAILY_SEND_CAP:-25}
+      - IDEMPOTENCY_TTL_SECONDS=${IDEMPOTENCY_TTL_SECONDS:-604800}
+    ports:
+      - "${BRIDGE_PORT:-8080}:8080"
+    depends_on:
+      - redis
+
+volumes:
+  n8n_data:
+  redis_data:
