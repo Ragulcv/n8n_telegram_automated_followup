@@ -1,1 +1,1 @@
-lead_id,name,telegram_username,telegram_chat_id,company,role,source_url,status,research_snippet,memory_summary,draft_message,last_message_sent,last_reply_received,last_sent_at,next_followup_at,followup_count,approved,approval_feedback,error,last_idempotency_key,last_sent_type,last_reply_at,last_error_at,message_history,telegram_user_id,username,phone_hash,timezone,stage,owner,last_contacted_at,suppression_reason
+lead_id,name,telegram_username,company,role,source_url,status,last_contacted_at,next_followup_at,followup_count

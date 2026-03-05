@@ -1,4 +1,4 @@
-# n8n Workflow Import Guide (Refactor v2)
+# n8n Workflow Import Guide (Simplified v3)
 
 ## Active workflow files
 
@@ -45,11 +45,23 @@ Publish both workflows in n8n after import.
 - `FOLLOWUP_MIN_DAYS`
 - `FOLLOWUP_MAX_DAYS`
 - `MAX_FOLLOWUPS`
+- `OPS_NOTIFY_ENABLED`
 
 ## Required credentials in n8n
 
 - Google Sheets OAuth2 credential
 - Telegram credential (Ops bot) for send/ack nodes
+
+## Required Google Sheets tabs
+
+1. `Leads` (business tracker)
+2. `SystemState` (hidden technical tab)
+3. `OpsAudit` (hidden audit tab)
+
+Use these templates:
+- `sheets/templates/Leads.csv`
+- `sheets/templates/SystemState.csv`
+- `sheets/templates/OpsAudit.csv`
 
 ## Bridge webhook target
 

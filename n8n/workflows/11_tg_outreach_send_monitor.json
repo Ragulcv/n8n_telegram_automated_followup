@@ -94,7 +94,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const rows = items.map(i => i.json || {});\nconst now = new Date();\nconst today = now.toISOString().slice(0,10);\nconst dailyCap = Number($env.DAILY_SEND_CAP || 10);\nconst sentToday = rows.filter(r => String(r.last_sent_at || '').slice(0,10) === today).length;\nif (sentToday >= dailyCap) return [];\n\nconst approvedRows = rows.filter(r => String(r.status || '').toUpperCase() === 'APPROVED' && String(r.approved || '').toUpperCase() === 'Y');\nif (!approvedRows.length) return [];\n\napprovedRows.sort((a,b)=> String(a.lead_id || '').localeCompare(String(b.lead_id || '')));\nconst lead = approvedRows[0];\n\nconst normalizedUsername = String(lead.telegram_username || lead.username || '').replace(/^@/, '');\nconst chatId = String(lead.telegram_chat_id || lead.telegram_user_id || '');\nconst draft = String(lead.draft_message || '').trim();\nif (!draft) return [];\n\nfunction hashText(s) {\n  let h = 0;\n  for (let i = 0; i < s.length; i++) {\n    h = ((h << 5) - h) + s.charCodeAt(i);\n    h |= 0;\n  }\n  return String(Math.abs(h));\n}\n\nconst followupCount = Number(lead.followup_count || 0);\nconst idem = `${lead.lead_id}-${followupCount}-${hashText(draft)}`;\nif (String(lead.last_idempotency_key || '') === idem && String(lead.status || '').toUpperCase() === 'SENT') return [];\n\nconst minDelay = Number($env.SEND_DELAY_MIN_SECONDS || 180);\nconst maxDelay = Number($env.SEND_DELAY_MAX_SECONDS || 600);\nconst delay = Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay;\nconst isFollowup = !!String(lead.next_followup_at || '').trim();\n\nreturn [{\n  json: {\n    ...lead,\n    telegram_username: normalizedUsername,\n    telegram_chat_id: chatId,\n    followup_count: followupCount,\n    is_followup: isFollowup,\n    send_delay_sec: delay,\n    idempotency_key: idem,\n    outbound_text: draft,\n  }\n}];"
+        "jsCode": "const leadRows = $items('Read Leads (Send)', 0, 0).map(i => i.json || {});\nconst stateRows = items.map(i => i.json || {}).filter(r => String(r.lead_id || '').trim());\nconst stateMap = new Map(stateRows.map(r => [String(r.lead_id).trim(), r]));\n\nconst now = new Date();\nconst today = now.toISOString().slice(0, 10);\nconst dailyCap = Number($env.DAILY_SEND_CAP || 10);\nconst sentToday = leadRows.filter(r => String(r.last_contacted_at || '').slice(0, 10) === today).length;\nif (sentToday >= dailyCap) return [];\n\nconst approvedLeads = leadRows\n  .filter(r => String(r.status || '').toUpperCase() === 'APPROVED')\n  .sort((a, b) => String(a.lead_id || '').localeCompare(String(b.lead_id || '')));\nif (!approvedLeads.length) return [];\n\nfunction hashText(s) {\n  let h = 0;\n  for (let i = 0; i < s.length; i++) {\n    h = ((h << 5) - h) + s.charCodeAt(i);\n    h |= 0;\n  }\n  return String(Math.abs(h));\n}\n\nfor (const lead of approvedLeads) {\n  const leadId = String(lead.lead_id || '').trim();\n  if (!leadId) continue;\n  const username = String(lead.telegram_username || '').replace(/^@/, '').trim();\n  if (!username) continue;\n  const state = stateMap.get(leadId) || {};\n  const draft = String(state.draft_message || '').trim();\n  if (!draft) continue;\n\n  const followupCount = Number(lead.followup_count || 0);\n  const idem = `${leadId}-${followupCount}-${hashText(draft)}`;\n  if (String(state.last_idempotency_key || '') === idem && String(lead.last_contacted_at || '').slice(0, 10) === today) {\n    continue;\n  }\n\n  const minDelay = Number($env.SEND_DELAY_MIN_SECONDS || 180);\n  const maxDelay = Number($env.SEND_DELAY_MAX_SECONDS || 600);\n  const delay = Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay;\n  const isFollowup = !!String(lead.next_followup_at || '').trim();\n\n  return [{\n    json: {\n      lead_id: leadId,\n      name: String(lead.name || ''),\n      telegram_username: username,\n      company: String(lead.company || ''),\n      role: String(lead.role || ''),\n      source_url: String(lead.source_url || ''),\n      status: String(lead.status || 'APPROVED'),\n      last_contacted_at: String(lead.last_contacted_at || ''),\n      next_followup_at: String(lead.next_followup_at || ''),\n      followup_count: followupCount,\n      telegram_chat_id: String(state.telegram_chat_id || ''),\n      draft_message: draft,\n      research_snippet: String(state.research_snippet || ''),\n      memory_summary: String(state.memory_summary || ''),\n      approval_feedback: String(state.approval_feedback || ''),\n      last_reply_received: String(state.last_reply_received || ''),\n      last_reply_at: String(state.last_reply_at || ''),\n      last_idempotency_key: String(state.last_idempotency_key || ''),\n      last_sent_type: String(state.last_sent_type || ''),\n      last_error: String(state.last_error || ''),\n      last_error_at: String(state.last_error_at || ''),\n      message_history: String(state.message_history || ''),\n      updated_at: String(state.updated_at || ''),\n      is_followup: isFollowup,\n      send_delay_sec: delay,\n      idempotency_key: idem,\n      outbound_text: draft,\n    }\n  }];\n}\n\nreturn [];"
       },
       "id": "b_select_send",
       "name": "Select Approved Lead To Send",
@@ -206,7 +206,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const lead = $items('Build Send Payload', 0, 0)[0].json;\nconst sendRes = items[0].json || {};\nconst now = new Date();\nconst nowIso = now.toISOString();\nconst minDays = Number($env.FOLLOWUP_MIN_DAYS || 2);\nconst maxDays = Number($env.FOLLOWUP_MAX_DAYS || 3);\nconst days = Math.floor(Math.random() * (maxDays - minDays + 1)) + minDays;\nconst next = new Date(now.getTime() + days * 24 * 60 * 60 * 1000).toISOString();\nconst wasFollowup = !!lead.is_followup;\nconst followups = Number(lead.followup_count || 0) + (wasFollowup ? 1 : 0);\nconst historyLine = `${nowIso}|OUTBOUND|${wasFollowup ? 'FOLLOWUP' : 'FIRST'}|${lead.outbound_text}`;\nreturn [{ json: {\n  ...lead,\n  status: 'SENT',\n  approved: 'N',\n  error: '',\n  last_error_at: '',\n  last_sent_at: nowIso,\n  last_message_sent: lead.outbound_text,\n  last_sent_type: wasFollowup ? 'FOLLOWUP' : 'FIRST',\n  next_followup_at: next,\n  followup_count: followups,\n  last_idempotency_key: lead.idempotency_key,\n  message_history: [String(lead.message_history || ''), historyLine].filter(Boolean).join('\\n')\n} }];"
+        "jsCode": "const lead = $items('Build Send Payload', 0, 0)[0].json;\nconst now = new Date();\nconst nowIso = now.toISOString();\nconst minDays = Number($env.FOLLOWUP_MIN_DAYS || 2);\nconst maxDays = Number($env.FOLLOWUP_MAX_DAYS || 3);\nconst days = Math.floor(Math.random() * (maxDays - minDays + 1)) + minDays;\nconst next = new Date(now.getTime() + days * 24 * 60 * 60 * 1000).toISOString();\nconst wasFollowup = !!lead.is_followup;\nconst followups = Number(lead.followup_count || 0) + (wasFollowup ? 1 : 0);\nconst historyLine = `${nowIso}|OUTBOUND|${wasFollowup ? 'FOLLOWUP' : 'FIRST'}|${lead.outbound_text}`;\nreturn [{ json: {\n  ...lead,\n  status: 'SENT',\n  last_contacted_at: nowIso,\n  next_followup_at: next,\n  followup_count: followups,\n  telegram_chat_id: String(lead.telegram_chat_id || ''),\n  last_idempotency_key: lead.idempotency_key,\n  last_sent_type: wasFollowup ? 'FOLLOWUP' : 'FIRST',\n  last_error: '',\n  last_error_at: '',\n  message_history: [String(lead.message_history || ''), historyLine].filter(Boolean).join('\\n'),\n  updated_at: nowIso,\n} }];"
       },
       "id": "b_build_sent_update",
       "name": "Build Sent Update",
@@ -219,7 +219,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const lead = $items('Build Send Payload', 0, 0)[0].json;\nconst sendRes = items[0].json || {};\nconst code = sendRes.result?.error_code || 'SEND_FAILED';\nconst nowIso = new Date().toISOString();\nreturn [{ json: {\n  ...lead,\n  status: 'FAILED',\n  approved: 'N',\n  error: code,\n  last_error_at: nowIso,\n  message_history: [String(lead.message_history || ''), `${nowIso}|ERROR|${code}`].filter(Boolean).join('\\n'),\n  ops_failure_message: `Send failed for lead_id ${lead.lead_id}: ${code}`,\n} }];"
+        "jsCode": "const lead = $items('Build Send Payload', 0, 0)[0].json;\nconst sendRes = items[0].json || {};\nconst code = sendRes.result?.error_code || 'SEND_FAILED';\nconst nowIso = new Date().toISOString();\nreturn [{ json: {\n  ...lead,\n  status: 'FAILED',\n  last_error: code,\n  last_error_at: nowIso,\n  message_history: [String(lead.message_history || ''), `${nowIso}|ERROR|${code}`].filter(Boolean).join('\\n'),\n  updated_at: nowIso,\n  ops_failure_message: `Send failed for lead_id ${lead.lead_id}: ${code}`,\n} }];"
       },
       "id": "b_build_fail_update",
       "name": "Build Failed Update",
@@ -249,29 +249,15 @@
           ],
           "value": {
             "lead_id": "={{$json.lead_id}}",
-            "name": "={{$json.name || ''}}",
-            "telegram_username": "={{$json.telegram_username || ''}}",
-            "telegram_chat_id": "={{$json.telegram_chat_id || ''}}",
-            "company": "={{$json.company || ''}}",
-            "role": "={{$json.role || ''}}",
-            "source_url": "={{$json.source_url || ''}}",
-            "status": "={{$json.status || ''}}",
-            "research_snippet": "={{$json.research_snippet || ''}}",
-            "memory_summary": "={{$json.memory_summary || ''}}",
-            "draft_message": "={{$json.draft_message || ''}}",
-            "last_message_sent": "={{$json.last_message_sent || ''}}",
-            "last_reply_received": "={{$json.last_reply_received || ''}}",
-            "last_sent_at": "={{$json.last_sent_at || ''}}",
-            "next_followup_at": "={{$json.next_followup_at || ''}}",
-            "followup_count": "={{$json.followup_count || 0}}",
-            "approved": "={{$json.approved || 'N'}}",
-            "approval_feedback": "={{$json.approval_feedback || ''}}",
-            "error": "={{$json.error || ''}}",
-            "last_idempotency_key": "={{$json.last_idempotency_key || ''}}",
-            "last_sent_type": "={{$json.last_sent_type || ''}}",
-            "last_reply_at": "={{$json.last_reply_at || ''}}",
-            "last_error_at": "={{$json.last_error_at || ''}}",
-            "message_history": "={{$json.message_history || ''}}"
+            "name": "={{$json.name || \"\"}}",
+            "telegram_username": "={{$json.telegram_username || \"\"}}",
+            "company": "={{$json.company || \"\"}}",
+            "role": "={{$json.role || \"\"}}",
+            "source_url": "={{$json.source_url || \"\"}}",
+            "status": "={{$json.status || \"NEW\"}}",
+            "last_contacted_at": "={{$json.last_contacted_at || \"\"}}",
+            "next_followup_at": "={{$json.next_followup_at || \"\"}}",
+            "followup_count": "={{$json.followup_count || 0}}"
           },
           "schema": []
         },
@@ -435,7 +421,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const row = items[0]?.json || {};\nconst paired = items[0]?.pairedItem;\nconst pairedIndex = (paired && typeof paired.item === 'number') ? paired.item : 0;\nconst cmd = $items('Parse Ops Action', 0, 0)[pairedIndex]?.json || {};\n\nif (!cmd.is_lead_action || !cmd.lead_id) return [];\n\nconst safeText = (v, max = 300) => String(v ?? '').replace(/[\\u0000-\\u001F\\u007F]/g, ' ').replace(/[<>]/g, '').replace(/\\s+/g, ' ').trim().slice(0, max);\nconst leadToken = String(cmd.lead_id).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 48);\n\nif (!row.lead_id) {\n  return [{\n    json: {\n      action: cmd.action,\n      lead_id: cmd.lead_id,\n      callback_id: cmd.callback_id,\n      actor: cmd.actor,\n      should_upsert: false,\n      needs_approval_post: false,\n      ack: `Lead ${cmd.lead_id} not found.`\n    }\n  }];\n}\n\nconst apiKey = String($env.OPENAI_API_KEY || '').trim();\nconst systemPrompt = String($env.OUTREACH_SYSTEM_PROMPT || '').trim() || 'Write concise human Telegram outreach. Do not invent facts.';\n\nasync function rewriteDraft(existingDraft, feedback) {\n  if (!apiKey || apiKey.startsWith('replace-with-')) return existingDraft;\n  const ctl = new AbortController();\n  const t = setTimeout(() => ctl.abort(), 20000);\n  try {\n    const userPrompt = `Rewrite this Telegram outreach draft using the feedback. Keep under 450 chars. One question max. No hallucinations.\\nDraft: ${existingDraft}\\nFeedback: ${feedback}`;\n    const res = await fetch('https://api.openai.com/v1/chat/completions', {\n      method: 'POST',\n      signal: ctl.signal,\n      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },\n      body: JSON.stringify({\n        model: 'gpt-4o-mini',\n        temperature: 0.5,\n        messages: [\n          { role: 'system', content: systemPrompt },\n          { role: 'user', content: userPrompt },\n        ],\n      }),\n    });\n    if (!res.ok) throw new Error('rewrite_http');\n    const data = await res.json();\n    const msg = String(data?.choices?.[0]?.message?.content || '').replace(/\\s+/g, ' ').trim();\n    return (msg || existingDraft).slice(0, 450);\n  } catch {\n    return existingDraft;\n  } finally {\n    clearTimeout(t);\n  }\n}\n\nconst out = {\n  ...row,\n  telegram_username: row.telegram_username || row.username || '',\n  telegram_chat_id: row.telegram_chat_id || row.telegram_user_id || '',\n  followup_count: Number(row.followup_count || 0),\n  action: cmd.action,\n  lead_id: row.lead_id,\n  actor: cmd.actor,\n  callback_id: cmd.callback_id,\n  ack: '',\n  should_upsert: true,\n  needs_approval_post: false,\n};\n\nif (cmd.action === 'approve') {\n  out.status = 'APPROVED';\n  out.approved = 'Y';\n  out.ack = `Approved ${row.lead_id}.`;\n}\n\nif (cmd.action === 'skip') {\n  const next = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();\n  out.status = 'FOLLOWUP_DUE';\n  out.approved = 'N';\n  out.next_followup_at = next;\n  out.ack = `Skipped ${row.lead_id} for now. Revisit tomorrow.`;\n}\n\nif (cmd.action === 'dnc') {\n  out.status = 'DNC';\n  out.approved = 'N';\n  out.ack = `Marked ${row.lead_id} as DNC.`;\n}\n\nif (cmd.action === 'edit_request') {\n  out.status = 'NEED_EDIT';\n  out.approved = 'N';\n  out.ack = `Send feedback using: edit ${row.lead_id} <feedback>`;\n}\n\nif (cmd.action === 'edit_feedback') {\n  const feedback = String(cmd.feedback || '').trim();\n  if (!feedback) {\n    out.status = 'NEED_EDIT';\n    out.approved = 'N';\n    out.ack = `Feedback missing. Use: edit ${row.lead_id} <feedback>`;\n  } else {\n    const updatedDraft = await rewriteDraft(String(row.draft_message || ''), feedback);\n    out.status = 'NEED_APPROVAL';\n    out.approved = 'N';\n    out.approval_feedback = feedback;\n    out.draft_message = updatedDraft;\n    out.ack = `Rewrote draft for ${row.lead_id}. Please approve again.`;\n    out.needs_approval_post = true;\n    const target = out.telegram_username ? `@${String(out.telegram_username).replace(/^@/, '')}` : (out.telegram_chat_id || 'unknown_target');\n    out.ops_message = [\n      'Approval Required (Edited)',\n      `lead_id: ${safeText(out.lead_id, 120)}`,\n      `name: ${safeText(out.name || 'N/A', 120)}`,\n      `target: ${safeText(target, 120)}`,\n      `feedback: ${safeText(out.approval_feedback, 280)}`,\n      '',\n      'Draft:',\n      safeText(out.draft_message, 520),\n      '',\n      `Text commands: approve ${safeText(out.lead_id, 120)} | edit ${safeText(out.lead_id, 120)} <feedback> | skip ${safeText(out.lead_id, 120)} | dnc ${safeText(out.lead_id, 120)}`,\n    ].join('\\n');\n    out.cb_approve = `approve:${leadToken}`;\n    out.cb_edit = `edit:${leadToken}`;\n    out.cb_skip = `skip:${leadToken}`;\n    out.cb_dnc = `dnc:${leadToken}`;\n  }\n}\n\nreturn [{ json: out }];\n"
+        "jsCode": "const stateRow = items[0]?.json || {};\nconst paired = items[0]?.pairedItem;\nconst pairedIndex = (paired && typeof paired.item === 'number') ? paired.item : 0;\nconst cmd = $items('Parse Ops Action', 0, 0)[pairedIndex]?.json || {};\nconst leadRow = $items('Lookup Lead By lead_id', 0, 0)[pairedIndex]?.json || {};\n\nif (!cmd.is_lead_action || !cmd.lead_id) return [];\n\nconst safeText = (v, max = 300) => String(v ?? '').replace(/[\\u0000-\\u001F\\u007F]/g, ' ').replace(/[<>]/g, '').replace(/\\s+/g, ' ').trim().slice(0, max);\nconst leadToken = String(cmd.lead_id).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 48);\nconst nowIso = new Date().toISOString();\n\nif (!leadRow.lead_id) {\n  return [{ json: {\n    action: cmd.action,\n    lead_id: cmd.lead_id,\n    callback_id: cmd.callback_id,\n    should_upsert_lead: false,\n    should_upsert_state: false,\n    needs_approval_post: false,\n    ack: `Lead ${cmd.lead_id} not found.`,\n    audit_event_at: nowIso,\n    audit_event_type: 'ops_not_found',\n    audit_actor: cmd.actor || 'ops',\n    audit_details: `Lead ${cmd.lead_id} not found`,\n  } }];\n}\n\nconst apiKey = String($env.OPENAI_API_KEY || '').trim();\nconst systemPrompt = String($env.OUTREACH_SYSTEM_PROMPT || '').trim() || 'Write concise human Telegram outreach. Do not invent facts.';\nasync function rewriteDraft(existingDraft, feedback) {\n  if (!apiKey || apiKey.startsWith('replace-with-')) return existingDraft;\n  const ctl = new AbortController();\n  const t = setTimeout(() => ctl.abort(), 20000);\n  try {\n    const userPrompt = `Rewrite this Telegram outreach draft using the feedback. Keep under 450 chars. One question max. No hallucinations.\\nDraft: ${existingDraft}\\nFeedback: ${feedback}`;\n    const res = await fetch('https://api.openai.com/v1/chat/completions', {\n      method: 'POST',\n      signal: ctl.signal,\n      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },\n      body: JSON.stringify({\n        model: 'gpt-4o-mini',\n        temperature: 0.5,\n        messages: [\n          { role: 'system', content: systemPrompt },\n          { role: 'user', content: userPrompt },\n        ],\n      }),\n    });\n    if (!res.ok) throw new Error('rewrite_http');\n    const data = await res.json();\n    const msg = String(data?.choices?.[0]?.message?.content || '').replace(/\\s+/g, ' ').trim();\n    return (msg || existingDraft).slice(0, 450);\n  } catch {\n    return existingDraft;\n  } finally {\n    clearTimeout(t);\n  }\n}\n\nconst out = {\n  lead_id: String(leadRow.lead_id || cmd.lead_id),\n  name: String(leadRow.name || ''),\n  telegram_username: String(leadRow.telegram_username || '').replace(/^@/, ''),\n  company: String(leadRow.company || ''),\n  role: String(leadRow.role || ''),\n  source_url: String(leadRow.source_url || ''),\n  status: String(leadRow.status || 'NEW'),\n  last_contacted_at: String(leadRow.last_contacted_at || ''),\n  next_followup_at: String(leadRow.next_followup_at || ''),\n  followup_count: Number(leadRow.followup_count || 0),\n\n  telegram_chat_id: String(stateRow.telegram_chat_id || ''),\n  draft_message: String(stateRow.draft_message || ''),\n  research_snippet: String(stateRow.research_snippet || ''),\n  memory_summary: String(stateRow.memory_summary || ''),\n  approval_feedback: String(stateRow.approval_feedback || ''),\n  last_reply_received: String(stateRow.last_reply_received || ''),\n  last_reply_at: String(stateRow.last_reply_at || ''),\n  last_idempotency_key: String(stateRow.last_idempotency_key || ''),\n  last_sent_type: String(stateRow.last_sent_type || ''),\n  last_error: String(stateRow.last_error || ''),\n  last_error_at: String(stateRow.last_error_at || ''),\n  message_history: String(stateRow.message_history || ''),\n  updated_at: nowIso,\n\n  action: cmd.action,\n  callback_id: cmd.callback_id,\n  should_upsert_lead: true,\n  should_upsert_state: true,\n  needs_approval_post: false,\n  ack: '',\n  audit_event_at: nowIso,\n  audit_event_type: `ops_${cmd.action}`,\n  audit_actor: cmd.actor || 'ops',\n  audit_details: '',\n};\n\nif (cmd.action === 'approve') {\n  out.status = 'APPROVED';\n  out.ack = `Approved ${out.lead_id}.`;\n}\nif (cmd.action === 'skip') {\n  const next = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();\n  out.status = 'FOLLOWUP_DUE';\n  out.next_followup_at = next;\n  out.ack = `Skipped ${out.lead_id} for now. Revisit tomorrow.`;\n}\nif (cmd.action === 'dnc') {\n  out.status = 'DNC';\n  out.ack = `Marked ${out.lead_id} as DNC.`;\n}\nif (cmd.action === 'edit_request') {\n  out.status = 'NEEDS_APPROVAL';\n  out.ack = `Send feedback using: edit ${out.lead_id} <feedback>`;\n}\nif (cmd.action === 'edit_feedback') {\n  const feedback = String(cmd.feedback || '').trim();\n  if (!feedback) {\n    out.status = 'NEEDS_APPROVAL';\n    out.ack = `Feedback missing. Use: edit ${out.lead_id} <feedback>`;\n  } else {\n    const updatedDraft = await rewriteDraft(out.draft_message, feedback);\n    out.status = 'NEEDS_APPROVAL';\n    out.approval_feedback = feedback;\n    out.draft_message = updatedDraft;\n    out.needs_approval_post = true;\n    out.ack = `Rewrote draft for ${out.lead_id}. Please approve again.`;\n    out.ops_message = [\n      'Approval Required (Edited)',\n      `lead_id: ${safeText(out.lead_id, 120)}`,\n      `name: ${safeText(out.name || 'N/A', 120)}`,\n      `target: @${safeText(out.telegram_username, 120)}`,\n      `feedback: ${safeText(out.approval_feedback, 280)}`,\n      '',\n      'Draft:',\n      safeText(out.draft_message, 520),\n      '',\n      `Text commands: approve ${safeText(out.lead_id, 120)} | edit ${safeText(out.lead_id, 120)} <feedback> | skip ${safeText(out.lead_id, 120)} | dnc ${safeText(out.lead_id, 120)}`,\n    ].join('\\n');\n    out.cb_approve = `approve:${leadToken}`;\n    out.cb_edit = `edit:${leadToken}`;\n    out.cb_skip = `skip:${leadToken}`;\n    out.cb_dnc = `dnc:${leadToken}`;\n  }\n}\n\nout.audit_details = out.ack;\nreturn [{ json: out }];"
       },
       "id": "b_apply_ops_action",
       "name": "Apply Ops Action",
@@ -465,29 +451,15 @@
           ],
           "value": {
             "lead_id": "={{$json.lead_id}}",
-            "name": "={{$json.name || ''}}",
-            "telegram_username": "={{$json.telegram_username || ''}}",
-            "telegram_chat_id": "={{$json.telegram_chat_id || ''}}",
-            "company": "={{$json.company || ''}}",
-            "role": "={{$json.role || ''}}",
-            "source_url": "={{$json.source_url || ''}}",
-            "status": "={{$json.status || ''}}",
-            "research_snippet": "={{$json.research_snippet || ''}}",
-            "memory_summary": "={{$json.memory_summary || ''}}",
-            "draft_message": "={{$json.draft_message || ''}}",
-            "last_message_sent": "={{$json.last_message_sent || ''}}",
-            "last_reply_received": "={{$json.last_reply_received || ''}}",
-            "last_sent_at": "={{$json.last_sent_at || ''}}",
-            "next_followup_at": "={{$json.next_followup_at || ''}}",
-            "followup_count": "={{$json.followup_count || 0}}",
-            "approved": "={{$json.approved || 'N'}}",
-            "approval_feedback": "={{$json.approval_feedback || ''}}",
-            "error": "={{$json.error || ''}}",
-            "last_idempotency_key": "={{$json.last_idempotency_key || ''}}",
-            "last_sent_type": "={{$json.last_sent_type || ''}}",
-            "last_reply_at": "={{$json.last_reply_at || ''}}",
-            "last_error_at": "={{$json.last_error_at || ''}}",
-            "message_history": "={{$json.message_history || ''}}"
+            "name": "={{$json.name || \"\"}}",
+            "telegram_username": "={{$json.telegram_username || \"\"}}",
+            "company": "={{$json.company || \"\"}}",
+            "role": "={{$json.role || \"\"}}",
+            "source_url": "={{$json.source_url || \"\"}}",
+            "status": "={{$json.status || \"NEW\"}}",
+            "last_contacted_at": "={{$json.last_contacted_at || \"\"}}",
+            "next_followup_at": "={{$json.next_followup_at || \"\"}}",
+            "followup_count": "={{$json.followup_count || 0}}"
           },
           "schema": []
         },
@@ -646,7 +618,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const evt = $items('Telegram Events Webhook', 0, 0)[0].json || {};\nconst allRows = items.map(i => i.json || {});\nconst senderId = String(evt.telegram_user_id || '').trim();\nconst text = String(evt.text || '').trim();\nif (!senderId || !text) return [];\n\nconst lead = allRows.find(r => String(r.telegram_chat_id || r.telegram_user_id || '').trim() === senderId);\nif (!lead) {\n  return [{ json: { unknown_reply_alert: `Inbound reply from unknown sender ${senderId}: ${text}` } }];\n}\n\nconst lower = text.toLowerCase();\nconst isStop = /(^|\\b)(not interested|stop|don't message|do not message|unsubscribe|remove me)(\\b|$)/i.test(lower);\nconst nowIso = new Date().toISOString();\n\nlet summary = '';\nconst apiKey = String($env.OPENAI_API_KEY || '').trim();\nif (!isStop && apiKey && !apiKey.startsWith('replace-with-')) {\n  const ctl = new AbortController();\n  const t = setTimeout(() => ctl.abort(), 20000);\n  try {\n    const res = await fetch('https://api.openai.com/v1/chat/completions', {\n      method: 'POST',\n      signal: ctl.signal,\n      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },\n      body: JSON.stringify({\n        model: 'gpt-4o-mini',\n        temperature: 0.3,\n        messages: [\n          { role: 'system', content: 'Summarize lead reply in 1-3 lines: intent, objection/need, next step.' },\n          { role: 'user', content: text },\n        ],\n      }),\n    });\n    if (res.ok) {\n      const data = await res.json();\n      summary = String(data?.choices?.[0]?.message?.content || '').replace(/\\s+/g, ' ').trim().slice(0, 350);\n    }\n  } catch {\n  } finally {\n    clearTimeout(t);\n  }\n}\n\nconst nextStatus = isStop ? 'DNC' : 'REPLIED';\nconst historyLine = `${nowIso}|INBOUND|${text}`;\nconst row = {\n  ...lead,\n  telegram_username: lead.telegram_username || lead.username || '',\n  telegram_chat_id: lead.telegram_chat_id || lead.telegram_user_id || senderId,\n  status: nextStatus,\n  approved: 'N',\n  last_reply_received: text,\n  last_reply_at: nowIso,\n  memory_summary: summary || lead.memory_summary || '',\n  message_history: [String(lead.message_history || ''), historyLine].filter(Boolean).join('\\n'),\n  ops_reply_alert: isStop\n    ? `Lead ${lead.lead_id} replied stop/not interested: ${text}`\n    : `New reply from lead ${lead.lead_id}: ${text}`\n};\n\nreturn [{ json: row }];"
+        "jsCode": "const evt = $items('Telegram Events Webhook', 0, 0)[0].json || {};\nconst leadRows = $items('Read Leads (Inbound Match)', 0, 0).map(i => i.json || {});\nconst stateRows = items.map(i => i.json || {}).filter(r => String(r.lead_id || '').trim());\n\nconst senderId = String(evt.telegram_user_id || '').trim();\nconst text = String(evt.text || '').trim();\nif (!text) return [];\n\nconst leadById = new Map(leadRows.filter(r => r.lead_id).map(r => [String(r.lead_id), r]));\nconst stateByLead = new Map(stateRows.map(r => [String(r.lead_id), r]));\n\nlet lead = null;\nlet state = null;\nconst evtLeadId = String(evt.lead_id || '').trim();\nif (evtLeadId && leadById.has(evtLeadId)) {\n  lead = leadById.get(evtLeadId);\n  state = stateByLead.get(evtLeadId) || {};\n} else if (senderId) {\n  state = stateRows.find(r => String(r.telegram_chat_id || '').trim() === senderId) || null;\n  if (state) lead = leadById.get(String(state.lead_id || '')) || null;\n}\n\nif (!lead) {\n  return [{ json: { unknown_reply_alert: `Inbound reply from unknown sender ${senderId || 'unknown'}: ${text}` } }];\n}\n\nconst lower = text.toLowerCase();\nconst isNotInterested = /(^|\\b)(not interested)(\\b|$)/i.test(lower);\nconst isStop = /(^|\\b)(stop|don't message|do not message|unsubscribe|remove me)(\\b|$)/i.test(lower);\nconst nowIso = new Date().toISOString();\nconst nextStatus = isStop ? 'DNC' : (isNotInterested ? 'NOT_INTERESTED' : 'REPLIED');\n\nlet summary = '';\nconst apiKey = String($env.OPENAI_API_KEY || '').trim();\nif (!isStop && apiKey && !apiKey.startsWith('replace-with-')) {\n  const ctl = new AbortController();\n  const t = setTimeout(() => ctl.abort(), 20000);\n  try {\n    const res = await fetch('https://api.openai.com/v1/chat/completions', {\n      method: 'POST',\n      signal: ctl.signal,\n      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },\n      body: JSON.stringify({\n        model: 'gpt-4o-mini',\n        temperature: 0.3,\n        messages: [\n          { role: 'system', content: 'Summarize lead reply in 1-3 lines: intent, objection/need, next step.' },\n          { role: 'user', content: text },\n        ],\n      }),\n    });\n    if (res.ok) {\n      const data = await res.json();\n      summary = String(data?.choices?.[0]?.message?.content || '').replace(/\\s+/g, ' ').trim().slice(0, 350);\n    }\n  } catch {\n  } finally {\n    clearTimeout(t);\n  }\n}\n\nconst historyLine = `${nowIso}|INBOUND|${text}`;\nreturn [{ json: {\n  lead_id: String(lead.lead_id || ''),\n  name: String(lead.name || ''),\n  telegram_username: String(lead.telegram_username || '').replace(/^@/, ''),\n  company: String(lead.company || ''),\n  role: String(lead.role || ''),\n  source_url: String(lead.source_url || ''),\n  status: nextStatus,\n  last_contacted_at: String(lead.last_contacted_at || ''),\n  next_followup_at: '',\n  followup_count: Number(lead.followup_count || 0),\n\n  telegram_chat_id: String((state && state.telegram_chat_id) || senderId || ''),\n  draft_message: String((state && state.draft_message) || ''),\n  research_snippet: String((state && state.research_snippet) || ''),\n  memory_summary: summary || String((state && state.memory_summary) || ''),\n  approval_feedback: String((state && state.approval_feedback) || ''),\n  last_reply_received: text,\n  last_reply_at: nowIso,\n  last_idempotency_key: String((state && state.last_idempotency_key) || ''),\n  last_sent_type: String((state && state.last_sent_type) || ''),\n  last_error: '',\n  last_error_at: '',\n  message_history: [String((state && state.message_history) || ''), historyLine].filter(Boolean).join('\\n'),\n  updated_at: nowIso,\n  ops_reply_alert: isStop || isNotInterested\n    ? `Lead ${lead.lead_id} requested stop/not interested: ${text}`\n    : `New reply from lead ${lead.lead_id}: ${text}`\n} }];"
       },
       "id": "b_build_inbound_update",
       "name": "Build Inbound Update",
@@ -676,29 +648,15 @@
           ],
           "value": {
             "lead_id": "={{$json.lead_id}}",
-            "name": "={{$json.name || ''}}",
-            "telegram_username": "={{$json.telegram_username || ''}}",
-            "telegram_chat_id": "={{$json.telegram_chat_id || ''}}",
-            "company": "={{$json.company || ''}}",
-            "role": "={{$json.role || ''}}",
-            "source_url": "={{$json.source_url || ''}}",
-            "status": "={{$json.status || ''}}",
-            "research_snippet": "={{$json.research_snippet || ''}}",
-            "memory_summary": "={{$json.memory_summary || ''}}",
-            "draft_message": "={{$json.draft_message || ''}}",
-            "last_message_sent": "={{$json.last_message_sent || ''}}",
-            "last_reply_received": "={{$json.last_reply_received || ''}}",
-            "last_sent_at": "={{$json.last_sent_at || ''}}",
-            "next_followup_at": "={{$json.next_followup_at || ''}}",
-            "followup_count": "={{$json.followup_count || 0}}",
-            "approved": "={{$json.approved || 'N'}}",
-            "approval_feedback": "={{$json.approval_feedback || ''}}",
-            "error": "={{$json.error || ''}}",
-            "last_idempotency_key": "={{$json.last_idempotency_key || ''}}",
-            "last_sent_type": "={{$json.last_sent_type || ''}}",
-            "last_reply_at": "={{$json.last_reply_at || ''}}",
-            "last_error_at": "={{$json.last_error_at || ''}}",
-            "message_history": "={{$json.message_history || ''}}"
+            "name": "={{$json.name || \"\"}}",
+            "telegram_username": "={{$json.telegram_username || \"\"}}",
+            "company": "={{$json.company || \"\"}}",
+            "role": "={{$json.role || \"\"}}",
+            "source_url": "={{$json.source_url || \"\"}}",
+            "status": "={{$json.status || \"NEW\"}}",
+            "last_contacted_at": "={{$json.last_contacted_at || \"\"}}",
+            "next_followup_at": "={{$json.next_followup_at || \"\"}}",
+            "followup_count": "={{$json.followup_count || 0}}"
           },
           "schema": []
         },
@@ -791,7 +749,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const rows = items.map(i => i.json || {});\nconst today = new Date().toISOString().slice(0,10);\nconst sentTodayRows = rows.filter(r => String(r.last_sent_at || '').slice(0,10) === today);\nconst repliesTodayRows = rows.filter(r => String(r.last_reply_at || '').slice(0,10) === today);\nconst failedTodayRows = rows.filter(r => String(r.last_error_at || '').slice(0,10) === today);\nconst followupsToday = sentTodayRows.filter(r => String(r.last_sent_type || '') === 'FOLLOWUP').length;\nconst sent = sentTodayRows.length;\nconst replies = repliesTodayRows.length;\nconst rate = sent > 0 ? ((replies / sent) * 100).toFixed(1) : '0.0';\nconst top = repliesTodayRows.slice(0,5).map(r => `- ${r.lead_id}: ${String(r.last_reply_received || '').slice(0,100)}`).join('\\n');\nconst text = [\n  '*Daily Outreach Summary*',\n  `Sent today: ${sent}`,\n  `Replies today: ${replies} (rate ${rate}%)`,\n  `Follow-ups today: ${followupsToday}`,\n  `Failed today: ${failedTodayRows.length}`,\n  top ? `Top replies:\\n${top}` : 'Top replies: -',\n].join('\\n');\nreturn [{ json: { summary_text: text } }];"
+        "jsCode": "const leads = $items('Read Leads (Summary)', 0, 0).map(i => i.json || {});\nconst states = items.map(i => i.json || {});\nconst today = new Date().toISOString().slice(0, 10);\n\nconst sentTodayRows = leads.filter(r => String(r.last_contacted_at || '').slice(0, 10) === today);\nconst repliesTodayRows = states.filter(r => String(r.last_reply_at || '').slice(0, 10) === today);\nconst failedTodayRows = states.filter(r => String(r.last_error_at || '').slice(0, 10) === today);\nconst followupsToday = states.filter(r => String(r.last_sent_type || '') === 'FOLLOWUP' && sentTodayRows.some(l => String(l.lead_id || '') === String(r.lead_id || ''))).length;\n\nconst sent = sentTodayRows.length;\nconst replies = repliesTodayRows.length;\nconst rate = sent > 0 ? ((replies / sent) * 100).toFixed(1) : '0.0';\nconst top = repliesTodayRows.slice(0, 5).map(r => `- ${r.lead_id}: ${String(r.last_reply_received || '').slice(0, 100)}`).join('\\n');\n\nconst text = [\n  '*Daily Outreach Summary*',\n  `Sent today: ${sent}`,\n  `Replies today: ${replies} (rate ${rate}%)`,\n  `Follow-ups today: ${followupsToday}`,\n  `Failed today: ${failedTodayRows.length}`,\n  top ? `Top replies:\\n${top}` : 'Top replies: -',\n].join('\\n');\n\nreturn [{ json: { summary_text: text } }];"
       },
       "id": "b_build_summary",
       "name": "Build Daily Summary",
@@ -932,7 +890,7 @@
         "conditions": {
           "boolean": [
             {
-              "value1": "={{$json.should_upsert || false}}",
+              "value1": "={{$json.should_upsert_lead || false}}",
               "operation": "isTrue"
             }
           ]
@@ -986,6 +944,357 @@
         1130,
         700
       ]
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "mode": "id",
+          "value": "={{$env.GSHEET_ID}}"
+        },
+        "sheetName": {
+          "mode": "name",
+          "value": "SystemState"
+        },
+        "options": {
+          "returnAll": true
+        }
+      },
+      "id": "b_read_system_state_send",
+      "name": "Read SystemState (Send)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        680,
+        120
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "U9w1TzdWoAPa4Xhs",
+          "name": "Google Sheets"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "mode": "id",
+          "value": "={{$env.GSHEET_ID}}"
+        },
+        "sheetName": {
+          "mode": "name",
+          "value": "SystemState"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "lead_id",
+              "lookupValue": "={{$json.lead_id}}"
+            }
+          ]
+        },
+        "options": {
+          "returnAll": true
+        }
+      },
+      "id": "b_lookup_system_state",
+      "name": "Lookup SystemState by lead_id",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1080,
+        520
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "U9w1TzdWoAPa4Xhs",
+          "name": "Google Sheets"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "mode": "id",
+          "value": "={{$env.GSHEET_ID}}"
+        },
+        "sheetName": {
+          "mode": "name",
+          "value": "SystemState"
+        },
+        "options": {
+          "returnAll": true
+        }
+      },
+      "id": "b_read_system_state_inbound",
+      "name": "Read SystemState (Inbound)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        680,
+        700
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "U9w1TzdWoAPa4Xhs",
+          "name": "Google Sheets"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "mode": "id",
+          "value": "={{$env.GSHEET_ID}}"
+        },
+        "sheetName": {
+          "mode": "name",
+          "value": "SystemState"
+        },
+        "options": {
+          "returnAll": true
+        }
+      },
+      "id": "b_read_system_state_summary",
+      "name": "Read SystemState (Summary)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        680,
+        920
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "U9w1TzdWoAPa4Xhs",
+          "name": "Google Sheets"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "mode": "id",
+          "value": "={{$env.GSHEET_ID}}"
+        },
+        "sheetName": {
+          "mode": "name",
+          "value": "SystemState"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": [
+            "lead_id"
+          ],
+          "value": {
+            "lead_id": "={{$json.lead_id}}",
+            "telegram_chat_id": "={{$json.telegram_chat_id || \"\"}}",
+            "draft_message": "={{$json.draft_message || \"\"}}",
+            "research_snippet": "={{$json.research_snippet || \"\"}}",
+            "memory_summary": "={{$json.memory_summary || \"\"}}",
+            "approval_feedback": "={{$json.approval_feedback || \"\"}}",
+            "last_reply_received": "={{$json.last_reply_received || \"\"}}",
+            "last_reply_at": "={{$json.last_reply_at || \"\"}}",
+            "last_idempotency_key": "={{$json.last_idempotency_key || \"\"}}",
+            "last_sent_type": "={{$json.last_sent_type || \"\"}}",
+            "last_error": "={{$json.last_error || \"\"}}",
+            "last_error_at": "={{$json.last_error_at || \"\"}}",
+            "message_history": "={{$json.message_history || \"\"}}",
+            "updated_at": "={{$json.updated_at || \"\"}}"
+          },
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "b_upsert_system_after_send",
+      "name": "Upsert SystemState After Send",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1860,
+        220
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "U9w1TzdWoAPa4Xhs",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "mode": "id",
+          "value": "={{$env.GSHEET_ID}}"
+        },
+        "sheetName": {
+          "mode": "name",
+          "value": "SystemState"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": [
+            "lead_id"
+          ],
+          "value": {
+            "lead_id": "={{$json.lead_id}}",
+            "telegram_chat_id": "={{$json.telegram_chat_id || \"\"}}",
+            "draft_message": "={{$json.draft_message || \"\"}}",
+            "research_snippet": "={{$json.research_snippet || \"\"}}",
+            "memory_summary": "={{$json.memory_summary || \"\"}}",
+            "approval_feedback": "={{$json.approval_feedback || \"\"}}",
+            "last_reply_received": "={{$json.last_reply_received || \"\"}}",
+            "last_reply_at": "={{$json.last_reply_at || \"\"}}",
+            "last_idempotency_key": "={{$json.last_idempotency_key || \"\"}}",
+            "last_sent_type": "={{$json.last_sent_type || \"\"}}",
+            "last_error": "={{$json.last_error || \"\"}}",
+            "last_error_at": "={{$json.last_error_at || \"\"}}",
+            "message_history": "={{$json.message_history || \"\"}}",
+            "updated_at": "={{$json.updated_at || \"\"}}"
+          },
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "b_upsert_system_action",
+      "name": "Upsert SystemState (Action)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1840,
+        520
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "U9w1TzdWoAPa4Xhs",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "mode": "id",
+          "value": "={{$env.GSHEET_ID}}"
+        },
+        "sheetName": {
+          "mode": "name",
+          "value": "SystemState"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": [
+            "lead_id"
+          ],
+          "value": {
+            "lead_id": "={{$json.lead_id}}",
+            "telegram_chat_id": "={{$json.telegram_chat_id || \"\"}}",
+            "draft_message": "={{$json.draft_message || \"\"}}",
+            "research_snippet": "={{$json.research_snippet || \"\"}}",
+            "memory_summary": "={{$json.memory_summary || \"\"}}",
+            "approval_feedback": "={{$json.approval_feedback || \"\"}}",
+            "last_reply_received": "={{$json.last_reply_received || \"\"}}",
+            "last_reply_at": "={{$json.last_reply_at || \"\"}}",
+            "last_idempotency_key": "={{$json.last_idempotency_key || \"\"}}",
+            "last_sent_type": "={{$json.last_sent_type || \"\"}}",
+            "last_error": "={{$json.last_error || \"\"}}",
+            "last_error_at": "={{$json.last_error_at || \"\"}}",
+            "message_history": "={{$json.message_history || \"\"}}",
+            "updated_at": "={{$json.updated_at || \"\"}}"
+          },
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "b_upsert_system_inbound",
+      "name": "Upsert SystemState (Inbound)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1360,
+        780
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "U9w1TzdWoAPa4Xhs",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.should_upsert_state || false}}",
+              "operation": "isTrue"
+            }
+          ]
+        }
+      },
+      "id": "b_if_should_upsert_systemstate",
+      "name": "Should Upsert SystemState?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1600,
+        620
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "append",
+        "documentId": {
+          "mode": "id",
+          "value": "={{$env.GSHEET_ID}}"
+        },
+        "sheetName": {
+          "mode": "name",
+          "value": "OpsAudit"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "event_at": "={{$json.audit_event_at || $now}}",
+            "lead_id": "={{$json.lead_id || \"\"}}",
+            "event_type": "={{$json.audit_event_type || \"ops_action\"}}",
+            "actor": "={{$json.audit_actor || \"system\"}}",
+            "details": "={{$json.audit_details || \"\"}}"
+          },
+          "schema": []
+        }
+      },
+      "id": "b_append_ops_audit_action",
+      "name": "Append Ops Audit (Action)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1840,
+        700
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "U9w1TzdWoAPa4Xhs",
+          "name": "Google Sheets"
+        }
+      }
     }
   ],
   "connections": {
@@ -1004,7 +1313,7 @@
       "main": [
         [
           {
-            "node": "Select Approved Lead To Send",
+            "node": "Read SystemState (Send)",
             "type": "main",
             "index": 0
           }
@@ -1091,6 +1400,11 @@
             "node": "Upsert Lead After Send",
             "type": "main",
             "index": 0
+          },
+          {
+            "node": "Upsert SystemState After Send",
+            "type": "main",
+            "index": 0
           }
         ]
       ]
@@ -1100,6 +1414,11 @@
         [
           {
             "node": "Upsert Lead After Send",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Upsert SystemState After Send",
             "type": "main",
             "index": 0
           },
@@ -1155,7 +1474,7 @@
       "main": [
         [
           {
-            "node": "Apply Ops Action",
+            "node": "Lookup SystemState by lead_id",
             "type": "main",
             "index": 0
           }
@@ -1171,6 +1490,11 @@
             "index": 0
           },
           {
+            "node": "Should Upsert SystemState?",
+            "type": "main",
+            "index": 0
+          },
+          {
             "node": "Needs Re-Approval Card?",
             "type": "main",
             "index": 0
@@ -1182,6 +1506,11 @@
           },
           {
             "node": "Send Action Ack",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Append Ops Audit (Action)",
             "type": "main",
             "index": 0
           }
@@ -1233,7 +1562,7 @@
       "main": [
         [
           {
-            "node": "Build Inbound Update",
+            "node": "Read SystemState (Inbound)",
             "type": "main",
             "index": 0
           }
@@ -1288,7 +1617,7 @@
       "main": [
         [
           {
-            "node": "Build Daily Summary",
+            "node": "Read SystemState (Summary)",
             "type": "main",
             "index": 0
           }
@@ -1393,6 +1722,11 @@
             "node": "Upsert Lead (Inbound)",
             "type": "main",
             "index": 0
+          },
+          {
+            "node": "Upsert SystemState (Inbound)",
+            "type": "main",
+            "index": 0
           }
         ],
         [
@@ -1403,6 +1737,62 @@
           },
           {
             "node": "Respond 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read SystemState (Send)": {
+      "main": [
+        [
+          {
+            "node": "Select Approved Lead To Send",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lookup SystemState by lead_id": {
+      "main": [
+        [
+          {
+            "node": "Apply Ops Action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should Upsert SystemState?": {
+      "main": [
+        [
+          {
+            "node": "Upsert SystemState (Action)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Read SystemState (Inbound)": {
+      "main": [
+        [
+          {
+            "node": "Build Inbound Update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read SystemState (Summary)": {
+      "main": [
+        [
+          {
+            "node": "Build Daily Summary",
             "type": "main",
             "index": 0
           }

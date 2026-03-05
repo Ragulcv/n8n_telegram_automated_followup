@@ -1,4 +1,4 @@
-# n8n Telegram Outreach Automation (Minimal v2)
+# n8n Telegram Outreach Automation (Simplified v3)
 
 This project now runs a refactored **2-workflow** setup:
 
@@ -8,7 +8,7 @@ This project now runs a refactored **2-workflow** setup:
 It reuses your existing stack:
 - `n8n` (Docker)
 - `telegram-bridge` (personal Telegram account sending/inbound)
-- `Google Sheets` (`Leads` tab as source of truth)
+- `Google Sheets` (`Leads` + hidden `SystemState` + hidden `OpsAudit`)
 - Ops Telegram bot for approvals/alerts
 
 ## What is live now
@@ -35,39 +35,47 @@ Then ensure these 2 workflows are published in n8n:
 - `wf_tg_outreach_draft_approve`
 - `wf_tg_outreach_send_monitor`
 
-## Leads sheet contract
+## Google Sheets contract
 
-Use tab name: `Leads`
+Business tracker tab:
+- `Leads`
 
-Required columns:
+`Leads` required columns (minimal):
 - `lead_id`
 - `name`
 - `telegram_username`
-- `telegram_chat_id`
 - `company`
 - `role`
 - `source_url`
 - `status`
-- `research_snippet`
-- `memory_summary`
-- `draft_message`
-- `last_message_sent`
-- `last_reply_received`
-- `last_sent_at`
+- `last_contacted_at`
 - `next_followup_at`
 - `followup_count`
-- `approved`
-- `approval_feedback`
-- `error`
-- `last_idempotency_key`
-- `last_sent_type`
-- `last_reply_at`
-- `last_error_at`
-- `message_history`
+
+Hidden system tabs:
+- `SystemState` columns:
+  - `lead_id`, `telegram_chat_id`, `draft_message`, `research_snippet`, `memory_summary`, `approval_feedback`, `last_reply_received`, `last_reply_at`, `last_idempotency_key`, `last_sent_type`, `last_error`, `last_error_at`, `message_history`, `updated_at`
+- `OpsAudit` columns:
+  - `event_at`, `lead_id`, `event_type`, `actor`, `details`
+
+`Leads.status` dropdown values:
+- `NEW`
+- `NEEDS_APPROVAL`
+- `APPROVED`
+- `SENT`
+- `REPLIED`
+- `FOLLOWUP_DUE`
+- `NOT_INTERESTED`
+- `DNC`
+- `FAILED`
 
 Templates:
 - `sheets/templates/Leads.csv`
 - `sheets/seed/Leads.csv`
+- `sheets/templates/SystemState.csv`
+- `sheets/seed/SystemState.csv`
+- `sheets/templates/OpsAudit.csv`
+- `sheets/seed/OpsAudit.csv`
 
 ## How to operate (beginner flow)
 
@@ -85,7 +93,6 @@ Templates:
 4. Approve/edit/skip/dnc via button or text command.
 5. Send engine (every 30 min) sends only rows with:
    - `status=APPROVED`
-   - `approved=Y`
 6. Inbound lead replies auto-update sheet and notify Ops immediately.
 7. Daily summary posts at `20:00` Dubai.
 
@@ -138,9 +145,12 @@ curl -X POST http://localhost:18080/v1/simulate/incoming \
 ## Expected outcomes
 
 - `Draft & Approve` execution succeeds.
-- `Leads` rows move to `NEED_APPROVAL` with generated `draft_message`.
+- `Leads` rows move to `NEEDS_APPROVAL`.
+- `SystemState` receives generated `draft_message`/`research_snippet`.
 - Ops chat receives approval cards with inline actions.
-- Inbound simulation triggers `Send & Monitor` success and updates lead reply fields.
+- Inbound simulation triggers `Send & Monitor` success and updates:
+  - `Leads.status`
+  - `SystemState.last_reply_received`/`memory_summary`.
 
 ## Workflow docs
 
