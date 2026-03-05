@@ -1,41 +1,59 @@
-# n8n Workflow Import Guide
+# n8n Workflow Import Guide (Refactor v2)
 
-## Files
+## Active workflow files
 
-1. `01_campaign_intake.json`
-2. `02_lead_qualification_enrichment.json`
-3. `03_send_orchestrator.json`
-4. `04_followup_scheduler.json`
-5. `05_inbound_listener.json`
-6. `06_human_approval.json`
-7. `07_daily_reporting.json`
-8. `08_reconciliation_exceptions.json`
+1. `10_tg_outreach_draft_approve.json`
+2. `11_tg_outreach_send_monitor.json`
 
-## Import order
+Legacy files `01..08` are archived under `n8n/workflows/archive/`.
 
-Import in numeric order and keep workflows disabled until all credentials are set.
+## Import
 
-## Required environment variables in n8n
+```bash
+cd "/Users/ragul/Applications/codex projects/n8n project for telegram outreach "
+make import-workflows
+```
+
+Publish both workflows in n8n after import.
+
+## Trigger model
+
+### Workflow A: Draft & Approve
+- Daily schedule at 10:00 Dubai
+- Manual trigger
+- Webhook: `POST /webhook/tg-outreach/draft-now`
+
+### Workflow B: Send & Monitor
+- Sending engine: every 30 min
+- Inbound webhook: `POST /webhook/telegram/events`
+- Ops command polling: every 1 min via Telegram Bot `getUpdates`
+- Daily summary: 20:00 Dubai
+
+## Required env vars
 
 - `GSHEET_ID`
 - `BRIDGE_BASE_URL`
 - `BRIDGE_API_KEY`
+- `OPS_BOT_TOKEN`
 - `OPS_CHAT_ID`
-- `APPROVAL_SLA_MINUTES`
-- `DELIVERY_RETRY_DELAYS`
+- `OPENAI_API_KEY`
 - `OUTREACH_SENDER_NAME`
+- `OUTREACH_SYSTEM_PROMPT`
+- `DAILY_SEND_CAP`
+- `SEND_DELAY_MIN_SECONDS`
+- `SEND_DELAY_MAX_SECONDS`
+- `FOLLOWUP_MIN_DAYS`
+- `FOLLOWUP_MAX_DAYS`
+- `MAX_FOLLOWUPS`
 
 ## Required credentials in n8n
 
 - Google Sheets OAuth2 credential
-- Telegram Bot credential (ops bot)
+- Telegram credential (Ops bot) for send/ack nodes
 
-After import, replace `REPLACE_ME` placeholder IDs in each node credential block.
+## Bridge webhook target
 
-## Webhook registration
-
-Workflow `05_inbound_listener.json` exposes:
-
+Bridge posts inbound events to:
 - `POST /webhook/telegram/events`
 
-Set `N8N_EVENTS_WEBHOOK_URL` in bridge `.env` to this endpoint (internal compose URL is already defaulted).
+Default internal compose URL is already expected via `N8N_EVENTS_WEBHOOK_URL=http://n8n:5678/webhook/telegram/events`.

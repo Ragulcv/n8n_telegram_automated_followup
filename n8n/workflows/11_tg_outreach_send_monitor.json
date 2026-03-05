@@ -1,0 +1,1286 @@
+{
+  "name": "TG Outreach - Send & Monitor",
+  "id": "wf_tg_outreach_send_monitor",
+  "settings": {
+    "timezone": "Asia/Dubai"
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 30
+            }
+          ]
+        }
+      },
+      "id": "b_send_cron",
+      "name": "Every 30 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        180,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "path": "telegram/events",
+        "httpMethod": "POST",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "b_inbound_webhook",
+      "name": "Telegram Events Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        180,
+        760
+      ],
+      "webhookId": "telegram-events"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 20
+            }
+          ]
+        }
+      },
+      "id": "b_daily_summary_cron",
+      "name": "Daily 20:00 (Dubai)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        180,
+        1100
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "mode": "id",
+          "value": "={{$env.GSHEET_ID}}"
+        },
+        "sheetName": {
+          "mode": "name",
+          "value": "Leads"
+        },
+        "options": {
+          "returnAll": true
+        }
+      },
+      "id": "b_read_leads_send",
+      "name": "Read Leads (Send)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        430,
+        120
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "U9w1TzdWoAPa4Xhs",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = items.map(i => i.json || {});\nconst now = new Date();\nconst today = now.toISOString().slice(0,10);\nconst dailyCap = Number($env.DAILY_SEND_CAP || 10);\nconst sentToday = rows.filter(r => String(r.last_sent_at || '').slice(0,10) === today).length;\nif (sentToday >= dailyCap) return [];\n\nconst approvedRows = rows.filter(r => String(r.status || '').toUpperCase() === 'APPROVED' && String(r.approved || '').toUpperCase() === 'Y');\nif (!approvedRows.length) return [];\n\napprovedRows.sort((a,b)=> String(a.lead_id || '').localeCompare(String(b.lead_id || '')));\nconst lead = approvedRows[0];\n\nconst normalizedUsername = String(lead.telegram_username || lead.username || '').replace(/^@/, '');\nconst chatId = String(lead.telegram_chat_id || lead.telegram_user_id || '');\nconst draft = String(lead.draft_message || '').trim();\nif (!draft) return [];\n\nfunction hashText(s) {\n  let h = 0;\n  for (let i = 0; i < s.length; i++) {\n    h = ((h << 5) - h) + s.charCodeAt(i);\n    h |= 0;\n  }\n  return String(Math.abs(h));\n}\n\nconst followupCount = Number(lead.followup_count || 0);\nconst idem = `${lead.lead_id}-${followupCount}-${hashText(draft)}`;\nif (String(lead.last_idempotency_key || '') === idem && String(lead.status || '').toUpperCase() === 'SENT') return [];\n\nconst minDelay = Number($env.SEND_DELAY_MIN_SECONDS || 180);\nconst maxDelay = Number($env.SEND_DELAY_MAX_SECONDS || 600);\nconst delay = Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay;\nconst isFollowup = !!String(lead.next_followup_at || '').trim();\n\nreturn [{\n  json: {\n    ...lead,\n    telegram_username: normalizedUsername,\n    telegram_chat_id: chatId,\n    followup_count: followupCount,\n    is_followup: isFollowup,\n    send_delay_sec: delay,\n    idempotency_key: idem,\n    outbound_text: draft,\n  }\n}];"
+      },
+      "id": "b_select_send",
+      "name": "Select Approved Lead To Send",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        680,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const sec = Number($json.send_delay_sec || 180);\nawait new Promise(resolve => setTimeout(resolve, sec * 1000));\nreturn items;"
+      },
+      "id": "b_delay",
+      "name": "Random Delay Before Send",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.BRIDGE_BASE_URL}}/v1/contacts/resolve",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{$env.BRIDGE_API_KEY}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { campaign_id: 'tg-outreach', lead_id: $json.lead_id, telegram_user_id: $json.telegram_chat_id || '', username: $json.telegram_username || '' } }}"
+      },
+      "id": "b_resolve_contact",
+      "name": "Resolve Contact",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1130,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const lead = $items('Select Approved Lead To Send', 0, 0)[0].json;\nconst resolveResp = items[0].json || {};\nconst resolvedChatId = resolveResp.telegram_user_id || lead.telegram_chat_id || '';\nconst resolvedUsername = String(resolveResp.username || lead.telegram_username || '').replace(/^@/, '');\nreturn [{ json: {\n  ...lead,\n  telegram_chat_id: resolvedChatId,\n  telegram_username: resolvedUsername,\n} }];"
+      },
+      "id": "b_merge_send_payload",
+      "name": "Build Send Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1360,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.BRIDGE_BASE_URL}}/v1/messages/send",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{$env.BRIDGE_API_KEY}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { campaign_id: 'tg-outreach', lead_id: $json.lead_id, destination: { telegram_user_id: $json.telegram_chat_id || '', username: $json.telegram_username || '' }, text: $json.outbound_text, idempotency_key: $json.idempotency_key, metadata: { sequence_step: Number($json.followup_count || 0), message_type: $json.is_followup ? 'follow_up' : 'first_touch', campaign_type: 'outreach' } } }}"
+      },
+      "id": "b_send_message",
+      "name": "Send Via Personal Telegram",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1600,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.result?.status || ''}}",
+              "operation": "equals",
+              "value2": "sent"
+            }
+          ]
+        }
+      },
+      "id": "b_if_send_success",
+      "name": "Send Success?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1830,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const lead = $items('Build Send Payload', 0, 0)[0].json;\nconst sendRes = items[0].json || {};\nconst now = new Date();\nconst nowIso = now.toISOString();\nconst minDays = Number($env.FOLLOWUP_MIN_DAYS || 2);\nconst maxDays = Number($env.FOLLOWUP_MAX_DAYS || 3);\nconst days = Math.floor(Math.random() * (maxDays - minDays + 1)) + minDays;\nconst next = new Date(now.getTime() + days * 24 * 60 * 60 * 1000).toISOString();\nconst wasFollowup = !!lead.is_followup;\nconst followups = Number(lead.followup_count || 0) + (wasFollowup ? 1 : 0);\nconst historyLine = `${nowIso}|OUTBOUND|${wasFollowup ? 'FOLLOWUP' : 'FIRST'}|${lead.outbound_text}`;\nreturn [{ json: {\n  ...lead,\n  status: 'SENT',\n  approved: 'N',\n  error: '',\n  last_error_at: '',\n  last_sent_at: nowIso,\n  last_message_sent: lead.outbound_text,\n  last_sent_type: wasFollowup ? 'FOLLOWUP' : 'FIRST',\n  next_followup_at: next,\n  followup_count: followups,\n  last_idempotency_key: lead.idempotency_key,\n  message_history: [String(lead.message_history || ''), historyLine].filter(Boolean).join('\\n')\n} }];"
+      },
+      "id": "b_build_sent_update",
+      "name": "Build Sent Update",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2060,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const lead = $items('Build Send Payload', 0, 0)[0].json;\nconst sendRes = items[0].json || {};\nconst code = sendRes.result?.error_code || 'SEND_FAILED';\nconst nowIso = new Date().toISOString();\nreturn [{ json: {\n  ...lead,\n  status: 'FAILED',\n  approved: 'N',\n  error: code,\n  last_error_at: nowIso,\n  message_history: [String(lead.message_history || ''), `${nowIso}|ERROR|${code}`].filter(Boolean).join('\\n'),\n  ops_failure_message: `Send failed for lead_id ${lead.lead_id}: ${code}`,\n} }];"
+      },
+      "id": "b_build_fail_update",
+      "name": "Build Failed Update",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2060,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "mode": "id",
+          "value": "={{$env.GSHEET_ID}}"
+        },
+        "sheetName": {
+          "mode": "name",
+          "value": "Leads"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": [
+            "lead_id"
+          ],
+          "value": {
+            "lead_id": "={{$json.lead_id}}",
+            "name": "={{$json.name || ''}}",
+            "telegram_username": "={{$json.telegram_username || ''}}",
+            "telegram_chat_id": "={{$json.telegram_chat_id || ''}}",
+            "company": "={{$json.company || ''}}",
+            "role": "={{$json.role || ''}}",
+            "source_url": "={{$json.source_url || ''}}",
+            "status": "={{$json.status || ''}}",
+            "research_snippet": "={{$json.research_snippet || ''}}",
+            "memory_summary": "={{$json.memory_summary || ''}}",
+            "draft_message": "={{$json.draft_message || ''}}",
+            "last_message_sent": "={{$json.last_message_sent || ''}}",
+            "last_reply_received": "={{$json.last_reply_received || ''}}",
+            "last_sent_at": "={{$json.last_sent_at || ''}}",
+            "next_followup_at": "={{$json.next_followup_at || ''}}",
+            "followup_count": "={{$json.followup_count || 0}}",
+            "approved": "={{$json.approved || 'N'}}",
+            "approval_feedback": "={{$json.approval_feedback || ''}}",
+            "error": "={{$json.error || ''}}",
+            "last_idempotency_key": "={{$json.last_idempotency_key || ''}}",
+            "last_sent_type": "={{$json.last_sent_type || ''}}",
+            "last_reply_at": "={{$json.last_reply_at || ''}}",
+            "last_error_at": "={{$json.last_error_at || ''}}",
+            "message_history": "={{$json.message_history || ''}}"
+          },
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "b_upsert_after_send",
+      "name": "Upsert Lead After Send",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2290,
+        120
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "U9w1TzdWoAPa4Xhs",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{$env.OPS_CHAT_ID}}",
+        "text": "={{$json.ops_failure_message}}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "b_ops_fail_alert",
+      "name": "Notify Ops Send Failure",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2290,
+        260
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "opsTelegramBotV1",
+          "name": "Ops Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $json || {};\nconst allowedChatId = String($env.OPS_CHAT_ID || '').trim();\nlet action = '';\nlet leadId = '';\nlet feedback = '';\nlet actor = '';\nlet chatId = '';\nlet callbackId = '';\n\nfunction extractLeadIdFromCard(text) {\n  const t = String(text || '');\n  const m1 = t.match(/lead_id:\\s*`([^`]+)`/i);\n  if (m1) return String(m1[1]).trim();\n  const m2 = t.match(/lead_id:\\s*([^\\n\\s]+)/i);\n  return m2 ? String(m2[1]).trim() : '';\n}\n\nif (item.callback_query) {\n  const data = String(item.callback_query.data || '').trim();\n  action = (data.split(':')[0] || '').toLowerCase();\n  leadId = String(data.split(':')[1] || '').trim();\n  if (!leadId) {\n    leadId = extractLeadIdFromCard(item.callback_query.message?.text || '');\n  }\n  actor = String(item.callback_query.from?.username || item.callback_query.from?.id || 'unknown');\n  chatId = String(item.callback_query.message?.chat?.id || '');\n  callbackId = String(item.callback_query.id || '');\n  if (action === 'edit') action = 'edit_request';\n} else if (item.message) {\n  const text = String(item.message.text || '').trim();\n  actor = String(item.message.from?.username || item.message.from?.id || 'unknown');\n  chatId = String(item.message.chat?.id || '');\n  const low = text.toLowerCase();\n  if (low === '/draftnow' || low === 'draftnow') {\n    action = 'draftnow';\n  } else {\n    const m = text.match(/^(approve|edit|skip|dnc)\\s+([^\\s]+)\\s*(.*)$/i);\n    if (m) {\n      action = m[1].toLowerCase();\n      leadId = String(m[2] || '').trim();\n      feedback = String(m[3] || '').trim();\n      if (action === 'edit' && !feedback) action = 'edit_request';\n      else if (action === 'edit' && feedback) action = 'edit_feedback';\n    }\n  }\n}\n\nif (allowedChatId && chatId && chatId !== allowedChatId) {\n  action = '';\n  leadId = '';\n  feedback = '';\n}\n\nreturn [{ json: { action, lead_id: leadId, feedback, actor, chat_id: chatId, callback_id: callbackId } }];"
+      },
+      "id": "b_parse_ops_action",
+      "name": "Parse Ops Action",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        430,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.action}}",
+              "operation": "equals",
+              "value2": "draftnow"
+            }
+          ]
+        }
+      },
+      "id": "b_if_draftnow",
+      "name": "Draft Now?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        670,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://n8n:5678/webhook/tg-outreach/draft-now",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { source: 'ops_bot', actor: $json.actor } }}"
+      },
+      "id": "b_call_draft_webhook",
+      "name": "Trigger Draft Workflow A",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        900,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{$env.OPS_CHAT_ID}}",
+        "text": "Draft workflow triggered.",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "b_confirm_draft_trigger",
+      "name": "Confirm Draft Trigger",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1130,
+        340
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "opsTelegramBotV1",
+          "name": "Ops Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "mode": "id",
+          "value": "={{$env.GSHEET_ID}}"
+        },
+        "sheetName": {
+          "mode": "name",
+          "value": "Leads"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "lead_id",
+              "lookupValue": "={{$json.lead_id}}"
+            }
+          ]
+        },
+        "options": {
+          "returnAll": true
+        }
+      },
+      "id": "b_lookup_lead_for_action",
+      "name": "Lookup Lead By lead_id",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        900,
+        520
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "U9w1TzdWoAPa4Xhs",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const cmd = $items('Parse Ops Action', 0, 0)[0].json;\nconst row = items[0]?.json || {};\nif (!cmd.action || !cmd.lead_id) return [];\nif (!row.lead_id) {\n  return [{ json: { action: cmd.action, lead_id: cmd.lead_id, ack: `Lead ${cmd.lead_id} not found.` } }];\n}\n\nconst apiKey = String($env.OPENAI_API_KEY || '').trim();\nconst systemPrompt = String($env.OUTREACH_SYSTEM_PROMPT || '').trim() || 'Write concise human Telegram outreach. Do not invent facts.';\nconst safeText = (v, max = 300) => String(v ?? '').replace(/[\\u0000-\\u001F\\u007F]/g, ' ').replace(/[<>]/g, '').replace(/\\s+/g, ' ').trim().slice(0, max);\n\nasync function rewriteDraft(existingDraft, feedback) {\n  if (!apiKey || apiKey.startsWith('replace-with-')) {\n    return existingDraft;\n  }\n  const ctl = new AbortController();\n  const t = setTimeout(() => ctl.abort(), 20000);\n  try {\n    const userPrompt = `Rewrite this Telegram outreach draft using the feedback. Keep under 450 chars. One question max. No hallucinations.\\nDraft: ${existingDraft}\\nFeedback: ${feedback}`;\n    const res = await fetch('https://api.openai.com/v1/chat/completions', {\n      method: 'POST',\n      signal: ctl.signal,\n      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },\n      body: JSON.stringify({\n        model: 'gpt-4o-mini',\n        temperature: 0.5,\n        messages: [\n          { role: 'system', content: systemPrompt },\n          { role: 'user', content: userPrompt },\n        ],\n      }),\n    });\n    if (!res.ok) throw new Error('rewrite_http');\n    const data = await res.json();\n    const msg = String(data?.choices?.[0]?.message?.content || '').replace(/\\s+/g, ' ').trim();\n    return (msg || existingDraft).slice(0, 450);\n  } catch {\n    return existingDraft;\n  } finally {\n    clearTimeout(t);\n  }\n}\n\nconst out = {\n  ...row,\n  telegram_username: row.telegram_username || row.username || '',\n  telegram_chat_id: row.telegram_chat_id || row.telegram_user_id || '',\n  followup_count: Number(row.followup_count || 0),\n  action: cmd.action,\n  lead_id: row.lead_id,\n  actor: cmd.actor,\n  callback_id: cmd.callback_id,\n  ack: '',\n  needs_approval_post: false,\n};\n\nif (cmd.action === 'approve') {\n  out.status = 'APPROVED';\n  out.approved = 'Y';\n  out.ack = `Approved ${row.lead_id}.`;\n}\n\nif (cmd.action === 'skip') {\n  const next = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();\n  out.status = 'FOLLOWUP_DUE';\n  out.approved = 'N';\n  out.next_followup_at = next;\n  out.ack = `Skipped ${row.lead_id} for now. Revisit tomorrow.`;\n}\n\nif (cmd.action === 'dnc') {\n  out.status = 'DNC';\n  out.approved = 'N';\n  out.ack = `Marked ${row.lead_id} as DNC.`;\n}\n\nif (cmd.action === 'edit_request') {\n  out.status = 'NEED_EDIT';\n  out.approved = 'N';\n  out.ack = `Send feedback using: edit ${row.lead_id} <feedback>`;\n}\n\nif (cmd.action === 'edit_feedback') {\n  const updatedDraft = await rewriteDraft(String(row.draft_message || ''), String(cmd.feedback || ''));\n  out.status = 'NEED_APPROVAL';\n  out.approved = 'N';\n  out.approval_feedback = String(cmd.feedback || '');\n  out.draft_message = updatedDraft;\n  out.ack = `Rewrote draft for ${row.lead_id}. Please approve again.`;\n  out.needs_approval_post = true;\n  const target = out.telegram_username ? `@${String(out.telegram_username).replace(/^@/, '')}` : (out.telegram_chat_id || 'unknown_target');\n  out.ops_message = [\n    'Approval Required (Edited)',\n    `lead_id: ${safeText(out.lead_id, 120)}`,\n    `name: ${safeText(out.name || 'N/A', 120)}`,\n    `target: ${safeText(target, 120)}`,\n    `feedback: ${safeText(out.approval_feedback, 280)}`,\n    '',\n    'Draft:',\n    safeText(out.draft_message, 520),\n    '',\n    `Text commands: approve ${safeText(out.lead_id, 120)} | edit ${safeText(out.lead_id, 120)} <feedback> | skip ${safeText(out.lead_id, 120)} | dnc ${safeText(out.lead_id, 120)}`,\n  ].join('\\n');\n  out.cb_approve = 'approve';\n  out.cb_edit = 'edit';\n  out.cb_skip = 'skip';\n  out.cb_dnc = 'dnc';\n}\n\nreturn [{ json: out }];"
+      },
+      "id": "b_apply_ops_action",
+      "name": "Apply Ops Action",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1130,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "mode": "id",
+          "value": "={{$env.GSHEET_ID}}"
+        },
+        "sheetName": {
+          "mode": "name",
+          "value": "Leads"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": [
+            "lead_id"
+          ],
+          "value": {
+            "lead_id": "={{$json.lead_id}}",
+            "name": "={{$json.name || ''}}",
+            "telegram_username": "={{$json.telegram_username || ''}}",
+            "telegram_chat_id": "={{$json.telegram_chat_id || ''}}",
+            "company": "={{$json.company || ''}}",
+            "role": "={{$json.role || ''}}",
+            "source_url": "={{$json.source_url || ''}}",
+            "status": "={{$json.status || ''}}",
+            "research_snippet": "={{$json.research_snippet || ''}}",
+            "memory_summary": "={{$json.memory_summary || ''}}",
+            "draft_message": "={{$json.draft_message || ''}}",
+            "last_message_sent": "={{$json.last_message_sent || ''}}",
+            "last_reply_received": "={{$json.last_reply_received || ''}}",
+            "last_sent_at": "={{$json.last_sent_at || ''}}",
+            "next_followup_at": "={{$json.next_followup_at || ''}}",
+            "followup_count": "={{$json.followup_count || 0}}",
+            "approved": "={{$json.approved || 'N'}}",
+            "approval_feedback": "={{$json.approval_feedback || ''}}",
+            "error": "={{$json.error || ''}}",
+            "last_idempotency_key": "={{$json.last_idempotency_key || ''}}",
+            "last_sent_type": "={{$json.last_sent_type || ''}}",
+            "last_reply_at": "={{$json.last_reply_at || ''}}",
+            "last_error_at": "={{$json.last_error_at || ''}}",
+            "message_history": "={{$json.message_history || ''}}"
+          },
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "b_upsert_after_action",
+      "name": "Upsert Lead (Action)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1360,
+        520
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "U9w1TzdWoAPa4Xhs",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "callback",
+        "operation": "answerQuery",
+        "queryId": "={{$json.callback_id}}",
+        "text": "={{$json.ack || 'Action processed'}}"
+      },
+      "id": "b_answer_callback",
+      "name": "Answer Callback Query",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1590,
+        460
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "opsTelegramBotV1",
+          "name": "Ops Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{$env.OPS_CHAT_ID}}",
+        "text": "={{$json.ack || 'Action processed'}}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "b_send_action_ack",
+      "name": "Send Action Ack",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1590,
+        580
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "opsTelegramBotV1",
+          "name": "Ops Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.needs_approval_post || false}}",
+              "operation": "isTrue"
+            }
+          ]
+        }
+      },
+      "id": "b_if_reapproval",
+      "name": "Needs Re-Approval Card?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1820,
+        580
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{`https://api.telegram.org/bot${$env.OPS_BOT_TOKEN}/sendMessage`}}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { chat_id: $env.OPS_CHAT_ID, text: $json.ops_message, disable_web_page_preview: true, reply_markup: { inline_keyboard: [ [ { text: 'APPROVE', callback_data: $json.cb_approve }, { text: 'EDIT', callback_data: $json.cb_edit } ], [ { text: 'SKIP', callback_data: $json.cb_skip }, { text: 'DNC', callback_data: $json.cb_dnc } ] ] } } }}"
+      },
+      "id": "b_send_reapproval_card",
+      "name": "Send Re-Approval Card",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2060,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.event_type}}",
+              "operation": "equals",
+              "value2": "incoming_message"
+            }
+          ]
+        }
+      },
+      "id": "b_if_incoming",
+      "name": "Incoming Message?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        430,
+        760
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "mode": "id",
+          "value": "={{$env.GSHEET_ID}}"
+        },
+        "sheetName": {
+          "mode": "name",
+          "value": "Leads"
+        },
+        "options": {
+          "returnAll": true
+        }
+      },
+      "id": "b_read_leads_inbound",
+      "name": "Read Leads (Inbound Match)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        670,
+        700
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "U9w1TzdWoAPa4Xhs",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const evt = $items('Telegram Events Webhook', 0, 0)[0].json || {};\nconst allRows = items.map(i => i.json || {});\nconst senderId = String(evt.telegram_user_id || '').trim();\nconst text = String(evt.text || '').trim();\nif (!senderId || !text) return [];\n\nconst lead = allRows.find(r => String(r.telegram_chat_id || r.telegram_user_id || '').trim() === senderId);\nif (!lead) {\n  return [{ json: { unknown_reply_alert: `Inbound reply from unknown sender ${senderId}: ${text}` } }];\n}\n\nconst lower = text.toLowerCase();\nconst isStop = /(^|\\b)(not interested|stop|don't message|do not message|unsubscribe|remove me)(\\b|$)/i.test(lower);\nconst nowIso = new Date().toISOString();\n\nlet summary = '';\nconst apiKey = String($env.OPENAI_API_KEY || '').trim();\nif (!isStop && apiKey && !apiKey.startsWith('replace-with-')) {\n  const ctl = new AbortController();\n  const t = setTimeout(() => ctl.abort(), 20000);\n  try {\n    const res = await fetch('https://api.openai.com/v1/chat/completions', {\n      method: 'POST',\n      signal: ctl.signal,\n      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },\n      body: JSON.stringify({\n        model: 'gpt-4o-mini',\n        temperature: 0.3,\n        messages: [\n          { role: 'system', content: 'Summarize lead reply in 1-3 lines: intent, objection/need, next step.' },\n          { role: 'user', content: text },\n        ],\n      }),\n    });\n    if (res.ok) {\n      const data = await res.json();\n      summary = String(data?.choices?.[0]?.message?.content || '').replace(/\\s+/g, ' ').trim().slice(0, 350);\n    }\n  } catch {\n  } finally {\n    clearTimeout(t);\n  }\n}\n\nconst nextStatus = isStop ? 'DNC' : 'REPLIED';\nconst historyLine = `${nowIso}|INBOUND|${text}`;\nconst row = {\n  ...lead,\n  telegram_username: lead.telegram_username || lead.username || '',\n  telegram_chat_id: lead.telegram_chat_id || lead.telegram_user_id || senderId,\n  status: nextStatus,\n  approved: 'N',\n  last_reply_received: text,\n  last_reply_at: nowIso,\n  memory_summary: summary || lead.memory_summary || '',\n  message_history: [String(lead.message_history || ''), historyLine].filter(Boolean).join('\\n'),\n  ops_reply_alert: isStop\n    ? `Lead ${lead.lead_id} replied stop/not interested: ${text}`\n    : `New reply from lead ${lead.lead_id}: ${text}`\n};\n\nreturn [{ json: row }];"
+      },
+      "id": "b_build_inbound_update",
+      "name": "Build Inbound Update",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        700
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "mode": "id",
+          "value": "={{$env.GSHEET_ID}}"
+        },
+        "sheetName": {
+          "mode": "name",
+          "value": "Leads"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": [
+            "lead_id"
+          ],
+          "value": {
+            "lead_id": "={{$json.lead_id}}",
+            "name": "={{$json.name || ''}}",
+            "telegram_username": "={{$json.telegram_username || ''}}",
+            "telegram_chat_id": "={{$json.telegram_chat_id || ''}}",
+            "company": "={{$json.company || ''}}",
+            "role": "={{$json.role || ''}}",
+            "source_url": "={{$json.source_url || ''}}",
+            "status": "={{$json.status || ''}}",
+            "research_snippet": "={{$json.research_snippet || ''}}",
+            "memory_summary": "={{$json.memory_summary || ''}}",
+            "draft_message": "={{$json.draft_message || ''}}",
+            "last_message_sent": "={{$json.last_message_sent || ''}}",
+            "last_reply_received": "={{$json.last_reply_received || ''}}",
+            "last_sent_at": "={{$json.last_sent_at || ''}}",
+            "next_followup_at": "={{$json.next_followup_at || ''}}",
+            "followup_count": "={{$json.followup_count || 0}}",
+            "approved": "={{$json.approved || 'N'}}",
+            "approval_feedback": "={{$json.approval_feedback || ''}}",
+            "error": "={{$json.error || ''}}",
+            "last_idempotency_key": "={{$json.last_idempotency_key || ''}}",
+            "last_sent_type": "={{$json.last_sent_type || ''}}",
+            "last_reply_at": "={{$json.last_reply_at || ''}}",
+            "last_error_at": "={{$json.last_error_at || ''}}",
+            "message_history": "={{$json.message_history || ''}}"
+          },
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "b_upsert_inbound",
+      "name": "Upsert Lead (Inbound)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1130,
+        700
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "U9w1TzdWoAPa4Xhs",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{$env.OPS_CHAT_ID}}",
+        "text": "={{$json.ops_reply_alert || $json.unknown_reply_alert}}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "b_notify_inbound",
+      "name": "Notify Ops Reply",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1360,
+        700
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "opsTelegramBotV1",
+          "name": "Ops Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: true } }}"
+      },
+      "id": "b_respond_webhook",
+      "name": "Respond 200",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.3,
+      "position": [
+        1580,
+        840
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "mode": "id",
+          "value": "={{$env.GSHEET_ID}}"
+        },
+        "sheetName": {
+          "mode": "name",
+          "value": "Leads"
+        },
+        "options": {
+          "returnAll": true
+        }
+      },
+      "id": "b_read_leads_summary",
+      "name": "Read Leads (Summary)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        430,
+        1100
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "U9w1TzdWoAPa4Xhs",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = items.map(i => i.json || {});\nconst today = new Date().toISOString().slice(0,10);\nconst sentTodayRows = rows.filter(r => String(r.last_sent_at || '').slice(0,10) === today);\nconst repliesTodayRows = rows.filter(r => String(r.last_reply_at || '').slice(0,10) === today);\nconst failedTodayRows = rows.filter(r => String(r.last_error_at || '').slice(0,10) === today);\nconst followupsToday = sentTodayRows.filter(r => String(r.last_sent_type || '') === 'FOLLOWUP').length;\nconst sent = sentTodayRows.length;\nconst replies = repliesTodayRows.length;\nconst rate = sent > 0 ? ((replies / sent) * 100).toFixed(1) : '0.0';\nconst top = repliesTodayRows.slice(0,5).map(r => `- ${r.lead_id}: ${String(r.last_reply_received || '').slice(0,100)}`).join('\\n');\nconst text = [\n  '*Daily Outreach Summary*',\n  `Sent today: ${sent}`,\n  `Replies today: ${replies} (rate ${rate}%)`,\n  `Follow-ups today: ${followupsToday}`,\n  `Failed today: ${failedTodayRows.length}`,\n  top ? `Top replies:\\n${top}` : 'Top replies: -',\n].join('\\n');\nreturn [{ json: { summary_text: text } }];"
+      },
+      "id": "b_build_summary",
+      "name": "Build Daily Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        670,
+        1100
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{$env.OPS_CHAT_ID}}",
+        "text": "={{$json.summary_text}}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "b_send_summary",
+      "name": "Send Daily Summary",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        900,
+        1100
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "opsTelegramBotV1",
+          "name": "Ops Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "b_ops_poll_cron",
+      "name": "Ops Poll Every Minute",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        180,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const state = $getWorkflowStaticData('global');\nconst offset = Number(state.ops_update_offset || 0);\nreturn [{ json: { offset } }];"
+      },
+      "id": "b_load_ops_offset",
+      "name": "Load Ops Offset",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{`https://api.telegram.org/bot${$env.OPS_BOT_TOKEN}/getUpdates`}}",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "offset",
+              "value": "={{$json.offset || 0}}"
+            },
+            {
+              "name": "timeout",
+              "value": "0"
+            },
+            {
+              "name": "allowed_updates",
+              "value": "[\"message\",\"callback_query\"]"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "b_fetch_ops_updates",
+      "name": "Fetch Ops Bot Updates",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        620,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const state = $getWorkflowStaticData('global');\nconst payload = items[0]?.json || {};\nconst updates = Array.isArray(payload.result) ? payload.result : [];\nif (updates.length) {\n  const maxId = Math.max(...updates.map(u => Number(u.update_id || 0)));\n  if (Number.isFinite(maxId) && maxId > 0) state.ops_update_offset = maxId + 1;\n}\nreturn updates.map(u => ({ json: u }));"
+      },
+      "id": "b_expand_ops_updates",
+      "name": "Expand Ops Updates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        840,
+        360
+      ]
+    }
+  ],
+  "connections": {
+    "Every 30 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Read Leads (Send)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Leads (Send)": {
+      "main": [
+        [
+          {
+            "node": "Select Approved Lead To Send",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select Approved Lead To Send": {
+      "main": [
+        [
+          {
+            "node": "Random Delay Before Send",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Random Delay Before Send": {
+      "main": [
+        [
+          {
+            "node": "Resolve Contact",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resolve Contact": {
+      "main": [
+        [
+          {
+            "node": "Build Send Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Send Payload": {
+      "main": [
+        [
+          {
+            "node": "Send Via Personal Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Via Personal Telegram": {
+      "main": [
+        [
+          {
+            "node": "Send Success?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Success?": {
+      "main": [
+        [
+          {
+            "node": "Build Sent Update",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Failed Update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Sent Update": {
+      "main": [
+        [
+          {
+            "node": "Upsert Lead After Send",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Failed Update": {
+      "main": [
+        [
+          {
+            "node": "Upsert Lead After Send",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Notify Ops Send Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Ops Action": {
+      "main": [
+        [
+          {
+            "node": "Draft Now?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Draft Now?": {
+      "main": [
+        [
+          {
+            "node": "Trigger Draft Workflow A",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Lookup Lead By lead_id",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Trigger Draft Workflow A": {
+      "main": [
+        [
+          {
+            "node": "Confirm Draft Trigger",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lookup Lead By lead_id": {
+      "main": [
+        [
+          {
+            "node": "Apply Ops Action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply Ops Action": {
+      "main": [
+        [
+          {
+            "node": "Upsert Lead (Action)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Needs Re-Approval Card?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Answer Callback Query",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Action Ack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Needs Re-Approval Card?": {
+      "main": [
+        [
+          {
+            "node": "Send Re-Approval Card",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Telegram Events Webhook": {
+      "main": [
+        [
+          {
+            "node": "Incoming Message?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Incoming Message?": {
+      "main": [
+        [
+          {
+            "node": "Read Leads (Inbound Match)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Leads (Inbound Match)": {
+      "main": [
+        [
+          {
+            "node": "Build Inbound Update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Inbound Update": {
+      "main": [
+        [
+          {
+            "node": "Upsert Lead (Inbound)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Notify Ops Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert Lead (Inbound)": {
+      "main": [
+        [
+          {
+            "node": "Notify Ops Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Ops Reply": {
+      "main": [
+        [
+          {
+            "node": "Respond 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Daily 20:00 (Dubai)": {
+      "main": [
+        [
+          {
+            "node": "Read Leads (Summary)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Leads (Summary)": {
+      "main": [
+        [
+          {
+            "node": "Build Daily Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Daily Summary": {
+      "main": [
+        [
+          {
+            "node": "Send Daily Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ops Poll Every Minute": {
+      "main": [
+        [
+          {
+            "node": "Load Ops Offset",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Ops Offset": {
+      "main": [
+        [
+          {
+            "node": "Fetch Ops Bot Updates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Ops Bot Updates": {
+      "main": [
+        [
+          {
+            "node": "Expand Ops Updates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Expand Ops Updates": {
+      "main": [
+        [
+          {
+            "node": "Parse Ops Action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

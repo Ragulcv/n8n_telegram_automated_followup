@@ -1,0 +1,274 @@
+{
+  "name": "TG Outreach - Draft & Approve",
+  "id": "wf_tg_outreach_draft_approve",
+  "settings": {
+    "timezone": "Asia/Dubai"
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 10
+            }
+          ]
+        }
+      },
+      "id": "a_schedule_daily",
+      "name": "Daily 10:00 (Dubai)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        180,
+        200
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "a_manual",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        180,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "path": "tg-outreach/draft-now",
+        "httpMethod": "POST",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "a_webhook",
+      "name": "Draft Now Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        180,
+        480
+      ],
+      "webhookId": "tg-outreach-draft-now"
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "mode": "id",
+          "value": "={{$env.GSHEET_ID}}"
+        },
+        "sheetName": {
+          "mode": "name",
+          "value": "Leads"
+        },
+        "options": {
+          "returnAll": true
+        }
+      },
+      "id": "a_read_leads",
+      "name": "Read Leads",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        460,
+        340
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "U9w1TzdWoAPa4Xhs",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const now = new Date();\nconst nowIso = now.toISOString();\nconst dailyCap = Number($env.DAILY_SEND_CAP || 10);\nconst maxFollowups = Number($env.MAX_FOLLOWUPS || 2);\nconst servicePrompt = String($env.OUTREACH_SYSTEM_PROMPT || `You are writing Telegram outreach for ${$env.OUTREACH_SENDER_NAME || 'OutreachTeam'}.\nOffer context: sentiment3 helps crypto projects (pre/post TGE) with CoinMarketCap marketing, token discovery, and trending visibility.\nNever invent facts. Keep tone human. One question max.`).trim();\nconst apiKey = String($env.OPENAI_API_KEY || '').trim();\nconst safeText = (v, max = 300) => String(v ?? '').replace(/[\\u0000-\\u001F\\u007F]/g, ' ').replace(/[<>]/g, '').replace(/\\s+/g, ' ').trim().slice(0, max);\n\nconst normalize = (row) => {\n  const leadId = String(row.lead_id || '').trim();\n  if (!leadId) return null;\n  const statusRaw = String(row.status || row.stage || 'NEW').trim();\n  const status = statusRaw ? statusRaw.toUpperCase().replace(/\\s+/g, '_') : 'NEW';\n  const approved = String(row.approved || 'N').toUpperCase() === 'Y' ? 'Y' : 'N';\n  const followupCount = Number(row.followup_count || 0);\n  const nextFollowupAt = row.next_followup_at ? new Date(row.next_followup_at) : null;\n  const dueFollowup = (status === 'SENT' || status === 'FOLLOWUP_DUE') && nextFollowupAt && !Number.isNaN(nextFollowupAt.getTime()) && nextFollowupAt <= now;\n  const eligible = (status === 'NEW' || dueFollowup) && !['DNC', 'NOT_INTERESTED', 'REPLIED'].includes(status) && !(status === 'NEED_APPROVAL' && approved !== 'Y') && followupCount < maxFollowups;\n  return {\n    ...row,\n    lead_id: leadId,\n    name: row.name || '',\n    telegram_username: row.telegram_username || row.username || '',\n    telegram_chat_id: row.telegram_chat_id || row.telegram_user_id || '',\n    company: row.company || '',\n    role: row.role || '',\n    source_url: row.source_url || '',\n    status,\n    approved,\n    followup_count: followupCount,\n    due_followup: dueFollowup,\n    eligible,\n  };\n};\n\nconst candidates = items\n  .map(i => normalize(i.json))\n  .filter(r => r && r.eligible)\n  .sort((a, b) => {\n    if (a.due_followup && !b.due_followup) return -1;\n    if (!a.due_followup && b.due_followup) return 1;\n    return String(a.lead_id).localeCompare(String(b.lead_id));\n  })\n  .slice(0, dailyCap);\n\nasync function fetchResearch(url) {\n  if (!url) return '';\n  try {\n    const ctl = new AbortController();\n    const t = setTimeout(() => ctl.abort(), 8000);\n    const res = await fetch(url, { signal: ctl.signal, headers: { 'User-Agent': 'Mozilla/5.0 OutreachBot/1.0' } });\n    clearTimeout(t);\n    if (!res.ok) return '';\n    const html = await res.text();\n    const title = (html.match(/<title[^>]*>([\\s\\S]*?)<\\/title>/i)?.[1] || '').replace(/\\s+/g, ' ').trim();\n    const meta = (html.match(/<meta[^>]*name=[\"']description[\"'][^>]*content=[\"']([\\s\\S]*?)[\"'][^>]*>/i)?.[1] || '').replace(/\\s+/g, ' ').trim();\n    const h1 = (html.match(/<h1[^>]*>([\\s\\S]*?)<\\/h1>/i)?.[1] || '').replace(/<[^>]+>/g, '').replace(/\\s+/g, ' ').trim();\n    const snippetParts = [title, h1, meta].filter(Boolean);\n    return snippetParts.slice(0, 2).join(' | ').slice(0, 320);\n  } catch {\n    return '';\n  }\n}\n\nasync function callOpenAi(system, user) {\n  if (!apiKey || apiKey.startsWith('replace-with-')) return '';\n  const ctl = new AbortController();\n  const t = setTimeout(() => ctl.abort(), 20000);\n  try {\n    const res = await fetch('https://api.openai.com/v1/chat/completions', {\n      method: 'POST',\n      signal: ctl.signal,\n      headers: {\n        'Authorization': `Bearer ${apiKey}`,\n        'Content-Type': 'application/json',\n      },\n      body: JSON.stringify({\n        model: 'gpt-4o-mini',\n        temperature: 0.6,\n        messages: [\n          { role: 'system', content: system },\n          { role: 'user', content: user },\n        ],\n      }),\n    });\n    if (!res.ok) return '';\n    const data = await res.json();\n    return String(data?.choices?.[0]?.message?.content || '').replace(/\\s+/g, ' ').trim();\n  } catch {\n    return '';\n  } finally {\n    clearTimeout(t);\n  }\n}\n\nasync function draftMessage(lead, researchSnippet) {\n  const isFollowup = !!lead.due_followup;\n  const hardRules = `Hard rules:\n- Do not invent company/role details.\n- If company/role/research is empty, keep message generic.\n- Max 450 characters.\n- One question maximum.\n- Human tone. No emojis by default.`;\n  const userPrompt = isFollowup\n    ? `Create a short follow-up Telegram message.\nLead name: ${lead.name || ''}\nCompany: ${lead.company || ''}\nRole: ${lead.role || ''}\nResearch snippet: ${researchSnippet || ''}\nLast message sent: ${lead.last_message_sent || ''}\nMemory summary: ${lead.memory_summary || ''}\nLast reply: ${lead.last_reply_received || ''}\n${hardRules}`\n    : `Create a first outreach Telegram message.\nLead name: ${lead.name || ''}\nCompany: ${lead.company || ''}\nRole: ${lead.role || ''}\nResearch snippet: ${researchSnippet || ''}\n${hardRules}`;\n\n  const generated = await callOpenAi(servicePrompt, userPrompt);\n  if (generated) return generated.slice(0, 450);\n\n  return (isFollowup\n    ? `Hi ${lead.name || ''}, quick follow-up in case this is still relevant. I can share a concise tailored plan if useful. Would that help?`\n    : `Hi ${lead.name || ''}, wanted to share a practical idea that may support your current growth goals. If useful, I can send a concise tailored note here. Interested?`).replace(/\\s+/g, ' ').trim().slice(0, 450);\n}\n\nconst out = [];\nfor (const lead of candidates) {\n  const research = await fetchResearch(String(lead.source_url || ''));\n  const draft = await draftMessage(lead, research);\n  const leadTag = lead.telegram_username ? `@${String(lead.telegram_username).replace(/^@/, '')}` : (lead.telegram_chat_id || 'unknown_target');\n  const opsMessage = [\n    'Approval Required',\n    `lead_id: ${safeText(lead.lead_id, 120)}`,\n    `name: ${safeText(lead.name || 'N/A', 120)}`,\n    `target: ${safeText(leadTag, 120)}`,\n    `research: ${safeText(research || '-', 240)}`,\n    '',\n    'Draft:',\n    safeText(draft, 520),\n    '',\n    `Text commands: approve ${safeText(lead.lead_id, 120)} | edit ${safeText(lead.lead_id, 120)} <feedback> | skip ${safeText(lead.lead_id, 120)} | dnc ${safeText(lead.lead_id, 120)}`,\n  ].join('\\n');\n\n  out.push({\n    json: {\n      ...lead,\n      status: 'NEED_APPROVAL',\n      approved: 'N',\n      approval_feedback: '',\n      research_snippet: research,\n      draft_message: draft,\n      error: '',\n      ops_message: opsMessage,\n      cb_approve: 'approve',\n      cb_edit: 'edit',\n      cb_skip: 'skip',\n      cb_dnc: 'dnc',\n      draft_generated_at: nowIso,\n    }\n  });\n}\n\nreturn out;"
+      },
+      "id": "a_build_drafts",
+      "name": "Build Drafts + Approval Cards",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        700,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "mode": "id",
+          "value": "={{$env.GSHEET_ID}}"
+        },
+        "sheetName": {
+          "mode": "name",
+          "value": "Leads"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": [
+            "lead_id"
+          ],
+          "value": {
+            "lead_id": "={{$json.lead_id}}",
+            "name": "={{$json.name || ''}}",
+            "telegram_username": "={{$json.telegram_username || ''}}",
+            "telegram_chat_id": "={{$json.telegram_chat_id || ''}}",
+            "company": "={{$json.company || ''}}",
+            "role": "={{$json.role || ''}}",
+            "source_url": "={{$json.source_url || ''}}",
+            "status": "={{$json.status || ''}}",
+            "research_snippet": "={{$json.research_snippet || ''}}",
+            "memory_summary": "={{$json.memory_summary || ''}}",
+            "draft_message": "={{$json.draft_message || ''}}",
+            "last_message_sent": "={{$json.last_message_sent || ''}}",
+            "last_reply_received": "={{$json.last_reply_received || ''}}",
+            "last_sent_at": "={{$json.last_sent_at || ''}}",
+            "next_followup_at": "={{$json.next_followup_at || ''}}",
+            "followup_count": "={{$json.followup_count || 0}}",
+            "approved": "={{$json.approved || 'N'}}",
+            "approval_feedback": "={{$json.approval_feedback || ''}}",
+            "error": "={{$json.error || ''}}",
+            "last_idempotency_key": "={{$json.last_idempotency_key || ''}}",
+            "last_sent_type": "={{$json.last_sent_type || ''}}",
+            "last_reply_at": "={{$json.last_reply_at || ''}}",
+            "last_error_at": "={{$json.last_error_at || ''}}",
+            "message_history": "={{$json.message_history || ''}}"
+          },
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "a_upsert_leads",
+      "name": "Upsert Leads (Need Approval)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        940,
+        340
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "U9w1TzdWoAPa4Xhs",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{String($env.OPS_NOTIFY_ENABLED || 'false').toLowerCase()}}",
+              "operation": "equals",
+              "value2": "true"
+            }
+          ]
+        }
+      },
+      "id": "a_if_ops_enabled",
+      "name": "Ops Notify Enabled?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1160,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{`https://api.telegram.org/bot${$env.OPS_BOT_TOKEN}/sendMessage`}}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { chat_id: $env.OPS_CHAT_ID, text: $json.ops_message, disable_web_page_preview: true, reply_markup: { inline_keyboard: [ [ { text: 'APPROVE', callback_data: $json.cb_approve }, { text: 'EDIT', callback_data: $json.cb_edit } ], [ { text: 'SKIP', callback_data: $json.cb_skip }, { text: 'DNC', callback_data: $json.cb_dnc } ] ] } } }}"
+      },
+      "id": "a_send_ops_card",
+      "name": "Send Ops Approval Card",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1380,
+        260
+      ]
+    }
+  ],
+  "connections": {
+    "Daily 10:00 (Dubai)": {
+      "main": [
+        [
+          {
+            "node": "Read Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Read Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Draft Now Webhook": {
+      "main": [
+        [
+          {
+            "node": "Read Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Leads": {
+      "main": [
+        [
+          {
+            "node": "Build Drafts + Approval Cards",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Drafts + Approval Cards": {
+      "main": [
+        [
+          {
+            "node": "Upsert Leads (Need Approval)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Ops Notify Enabled?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ops Notify Enabled?": {
+      "main": [
+        [
+          {
+            "node": "Send Ops Approval Card",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  }
+}
