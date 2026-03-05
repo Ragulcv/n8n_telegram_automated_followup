@@ -319,7 +319,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const item = $json || {};\nconst allowedChatId = String($env.OPS_CHAT_ID || '').trim();\nlet action = '';\nlet leadId = '';\nlet feedback = '';\nlet actor = '';\nlet chatId = '';\nlet callbackId = '';\n\nfunction extractLeadIdFromCard(text) {\n  const t = String(text || '');\n  const m1 = t.match(/lead_id:\\s*`([^`]+)`/i);\n  if (m1) return String(m1[1]).trim();\n  const m2 = t.match(/lead_id:\\s*([^\\n\\s]+)/i);\n  return m2 ? String(m2[1]).trim() : '';\n}\n\nif (item.callback_query) {\n  const data = String(item.callback_query.data || '').trim();\n  action = (data.split(':')[0] || '').toLowerCase();\n  leadId = String(data.split(':')[1] || '').trim();\n  if (!leadId) {\n    leadId = extractLeadIdFromCard(item.callback_query.message?.text || '');\n  }\n  actor = String(item.callback_query.from?.username || item.callback_query.from?.id || 'unknown');\n  chatId = String(item.callback_query.message?.chat?.id || '');\n  callbackId = String(item.callback_query.id || '');\n  if (action === 'edit') action = 'edit_request';\n} else if (item.message) {\n  const text = String(item.message.text || '').trim();\n  actor = String(item.message.from?.username || item.message.from?.id || 'unknown');\n  chatId = String(item.message.chat?.id || '');\n  const low = text.toLowerCase();\n  if (low === '/draftnow' || low === 'draftnow') {\n    action = 'draftnow';\n  } else {\n    const m = text.match(/^(approve|edit|skip|dnc)\\s+([^\\s]+)\\s*(.*)$/i);\n    if (m) {\n      action = m[1].toLowerCase();\n      leadId = String(m[2] || '').trim();\n      feedback = String(m[3] || '').trim();\n      if (action === 'edit' && !feedback) action = 'edit_request';\n      else if (action === 'edit' && feedback) action = 'edit_feedback';\n    }\n  }\n}\n\nif (allowedChatId && chatId && chatId !== allowedChatId) {\n  action = '';\n  leadId = '';\n  feedback = '';\n}\n\nreturn [{ json: { action, lead_id: leadId, feedback, actor, chat_id: chatId, callback_id: callbackId } }];"
+        "jsCode": "const item = $json || {};\nconst allowedChatId = String($env.OPS_CHAT_ID || '').trim();\nlet action = '';\nlet leadId = '';\nlet feedback = '';\nlet actor = '';\nlet chatId = '';\nlet callbackId = '';\n\nfunction extractLeadIdFromCard(text) {\n  const t = String(text || '');\n  const m = t.match(/lead_id:\\s*([^\\n]+)/i);\n  if (!m) return '';\n  return String(m[1] || '').trim().split(/\\s+/)[0].replace(/[^A-Za-z0-9_-]/g, '') || '';\n}\n\nif (item.callback_query) {\n  const data = String(item.callback_query.data || '').trim();\n  const parts = data.split(':');\n  action = String(parts.shift() || '').toLowerCase();\n  leadId = String(parts.join(':') || '').trim();\n  if (!leadId) leadId = extractLeadIdFromCard(item.callback_query.message?.text || '');\n  actor = String(item.callback_query.from?.username || item.callback_query.from?.id || 'unknown');\n  chatId = String(item.callback_query.message?.chat?.id || '');\n  callbackId = String(item.callback_query.id || '');\n  if (action === 'edit') action = 'edit_request';\n} else if (item.message) {\n  const text = String(item.message.text || '').trim();\n  actor = String(item.message.from?.username || item.message.from?.id || 'unknown');\n  chatId = String(item.message.chat?.id || '');\n  const low = text.toLowerCase();\n  if (low === '/draftnow' || low === 'draftnow') {\n    action = 'draftnow';\n  } else {\n    const m = text.match(/^\\/?(approve|edit|skip|dnc)\\s+([^\\s]+)\\s*(.*)$/i);\n    if (m) {\n      action = String(m[1] || '').toLowerCase();\n      leadId = String(m[2] || '').trim();\n      feedback = String(m[3] || '').trim();\n      if (action === 'edit' && !feedback) action = 'edit_request';\n      else if (action === 'edit' && feedback) action = 'edit_feedback';\n    }\n  }\n}\n\nif (allowedChatId && chatId && chatId !== allowedChatId) {\n  action = '';\n  leadId = '';\n  feedback = '';\n}\n\nconst leadActions = new Set(['approve', 'skip', 'dnc', 'edit_request', 'edit_feedback']);\nconst isDraftNow = action === 'draftnow';\nconst isLeadAction = leadActions.has(action) && !!leadId;\n\nreturn [{\n  json: {\n    action,\n    lead_id: leadId,\n    feedback,\n    actor,\n    chat_id: chatId,\n    callback_id: callbackId,\n    is_draftnow: isDraftNow,\n    is_lead_action: isLeadAction,\n  }\n}];\n"
       },
       "id": "b_parse_ops_action",
       "name": "Parse Ops Action",
@@ -430,11 +430,12 @@
           "id": "U9w1TzdWoAPa4Xhs",
           "name": "Google Sheets"
         }
-      }
+      },
+      "alwaysOutputData": true
     },
     {
       "parameters": {
-        "jsCode": "const cmd = $items('Parse Ops Action', 0, 0)[0].json;\nconst row = items[0]?.json || {};\nif (!cmd.action || !cmd.lead_id) return [];\nif (!row.lead_id) {\n  return [{ json: { action: cmd.action, lead_id: cmd.lead_id, ack: `Lead ${cmd.lead_id} not found.` } }];\n}\n\nconst apiKey = String($env.OPENAI_API_KEY || '').trim();\nconst systemPrompt = String($env.OUTREACH_SYSTEM_PROMPT || '').trim() || 'Write concise human Telegram outreach. Do not invent facts.';\nconst safeText = (v, max = 300) => String(v ?? '').replace(/[\\u0000-\\u001F\\u007F]/g, ' ').replace(/[<>]/g, '').replace(/\\s+/g, ' ').trim().slice(0, max);\n\nasync function rewriteDraft(existingDraft, feedback) {\n  if (!apiKey || apiKey.startsWith('replace-with-')) {\n    return existingDraft;\n  }\n  const ctl = new AbortController();\n  const t = setTimeout(() => ctl.abort(), 20000);\n  try {\n    const userPrompt = `Rewrite this Telegram outreach draft using the feedback. Keep under 450 chars. One question max. No hallucinations.\\nDraft: ${existingDraft}\\nFeedback: ${feedback}`;\n    const res = await fetch('https://api.openai.com/v1/chat/completions', {\n      method: 'POST',\n      signal: ctl.signal,\n      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },\n      body: JSON.stringify({\n        model: 'gpt-4o-mini',\n        temperature: 0.5,\n        messages: [\n          { role: 'system', content: systemPrompt },\n          { role: 'user', content: userPrompt },\n        ],\n      }),\n    });\n    if (!res.ok) throw new Error('rewrite_http');\n    const data = await res.json();\n    const msg = String(data?.choices?.[0]?.message?.content || '').replace(/\\s+/g, ' ').trim();\n    return (msg || existingDraft).slice(0, 450);\n  } catch {\n    return existingDraft;\n  } finally {\n    clearTimeout(t);\n  }\n}\n\nconst out = {\n  ...row,\n  telegram_username: row.telegram_username || row.username || '',\n  telegram_chat_id: row.telegram_chat_id || row.telegram_user_id || '',\n  followup_count: Number(row.followup_count || 0),\n  action: cmd.action,\n  lead_id: row.lead_id,\n  actor: cmd.actor,\n  callback_id: cmd.callback_id,\n  ack: '',\n  needs_approval_post: false,\n};\n\nif (cmd.action === 'approve') {\n  out.status = 'APPROVED';\n  out.approved = 'Y';\n  out.ack = `Approved ${row.lead_id}.`;\n}\n\nif (cmd.action === 'skip') {\n  const next = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();\n  out.status = 'FOLLOWUP_DUE';\n  out.approved = 'N';\n  out.next_followup_at = next;\n  out.ack = `Skipped ${row.lead_id} for now. Revisit tomorrow.`;\n}\n\nif (cmd.action === 'dnc') {\n  out.status = 'DNC';\n  out.approved = 'N';\n  out.ack = `Marked ${row.lead_id} as DNC.`;\n}\n\nif (cmd.action === 'edit_request') {\n  out.status = 'NEED_EDIT';\n  out.approved = 'N';\n  out.ack = `Send feedback using: edit ${row.lead_id} <feedback>`;\n}\n\nif (cmd.action === 'edit_feedback') {\n  const updatedDraft = await rewriteDraft(String(row.draft_message || ''), String(cmd.feedback || ''));\n  out.status = 'NEED_APPROVAL';\n  out.approved = 'N';\n  out.approval_feedback = String(cmd.feedback || '');\n  out.draft_message = updatedDraft;\n  out.ack = `Rewrote draft for ${row.lead_id}. Please approve again.`;\n  out.needs_approval_post = true;\n  const target = out.telegram_username ? `@${String(out.telegram_username).replace(/^@/, '')}` : (out.telegram_chat_id || 'unknown_target');\n  out.ops_message = [\n    'Approval Required (Edited)',\n    `lead_id: ${safeText(out.lead_id, 120)}`,\n    `name: ${safeText(out.name || 'N/A', 120)}`,\n    `target: ${safeText(target, 120)}`,\n    `feedback: ${safeText(out.approval_feedback, 280)}`,\n    '',\n    'Draft:',\n    safeText(out.draft_message, 520),\n    '',\n    `Text commands: approve ${safeText(out.lead_id, 120)} | edit ${safeText(out.lead_id, 120)} <feedback> | skip ${safeText(out.lead_id, 120)} | dnc ${safeText(out.lead_id, 120)}`,\n  ].join('\\n');\n  out.cb_approve = 'approve';\n  out.cb_edit = 'edit';\n  out.cb_skip = 'skip';\n  out.cb_dnc = 'dnc';\n}\n\nreturn [{ json: out }];"
+        "jsCode": "const row = items[0]?.json || {};\nconst paired = items[0]?.pairedItem;\nconst pairedIndex = (paired && typeof paired.item === 'number') ? paired.item : 0;\nconst cmd = $items('Parse Ops Action', 0, 0)[pairedIndex]?.json || {};\n\nif (!cmd.is_lead_action || !cmd.lead_id) return [];\n\nconst safeText = (v, max = 300) => String(v ?? '').replace(/[\\u0000-\\u001F\\u007F]/g, ' ').replace(/[<>]/g, '').replace(/\\s+/g, ' ').trim().slice(0, max);\nconst leadToken = String(cmd.lead_id).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 48);\n\nif (!row.lead_id) {\n  return [{\n    json: {\n      action: cmd.action,\n      lead_id: cmd.lead_id,\n      callback_id: cmd.callback_id,\n      actor: cmd.actor,\n      should_upsert: false,\n      needs_approval_post: false,\n      ack: `Lead ${cmd.lead_id} not found.`\n    }\n  }];\n}\n\nconst apiKey = String($env.OPENAI_API_KEY || '').trim();\nconst systemPrompt = String($env.OUTREACH_SYSTEM_PROMPT || '').trim() || 'Write concise human Telegram outreach. Do not invent facts.';\n\nasync function rewriteDraft(existingDraft, feedback) {\n  if (!apiKey || apiKey.startsWith('replace-with-')) return existingDraft;\n  const ctl = new AbortController();\n  const t = setTimeout(() => ctl.abort(), 20000);\n  try {\n    const userPrompt = `Rewrite this Telegram outreach draft using the feedback. Keep under 450 chars. One question max. No hallucinations.\\nDraft: ${existingDraft}\\nFeedback: ${feedback}`;\n    const res = await fetch('https://api.openai.com/v1/chat/completions', {\n      method: 'POST',\n      signal: ctl.signal,\n      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },\n      body: JSON.stringify({\n        model: 'gpt-4o-mini',\n        temperature: 0.5,\n        messages: [\n          { role: 'system', content: systemPrompt },\n          { role: 'user', content: userPrompt },\n        ],\n      }),\n    });\n    if (!res.ok) throw new Error('rewrite_http');\n    const data = await res.json();\n    const msg = String(data?.choices?.[0]?.message?.content || '').replace(/\\s+/g, ' ').trim();\n    return (msg || existingDraft).slice(0, 450);\n  } catch {\n    return existingDraft;\n  } finally {\n    clearTimeout(t);\n  }\n}\n\nconst out = {\n  ...row,\n  telegram_username: row.telegram_username || row.username || '',\n  telegram_chat_id: row.telegram_chat_id || row.telegram_user_id || '',\n  followup_count: Number(row.followup_count || 0),\n  action: cmd.action,\n  lead_id: row.lead_id,\n  actor: cmd.actor,\n  callback_id: cmd.callback_id,\n  ack: '',\n  should_upsert: true,\n  needs_approval_post: false,\n};\n\nif (cmd.action === 'approve') {\n  out.status = 'APPROVED';\n  out.approved = 'Y';\n  out.ack = `Approved ${row.lead_id}.`;\n}\n\nif (cmd.action === 'skip') {\n  const next = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();\n  out.status = 'FOLLOWUP_DUE';\n  out.approved = 'N';\n  out.next_followup_at = next;\n  out.ack = `Skipped ${row.lead_id} for now. Revisit tomorrow.`;\n}\n\nif (cmd.action === 'dnc') {\n  out.status = 'DNC';\n  out.approved = 'N';\n  out.ack = `Marked ${row.lead_id} as DNC.`;\n}\n\nif (cmd.action === 'edit_request') {\n  out.status = 'NEED_EDIT';\n  out.approved = 'N';\n  out.ack = `Send feedback using: edit ${row.lead_id} <feedback>`;\n}\n\nif (cmd.action === 'edit_feedback') {\n  const feedback = String(cmd.feedback || '').trim();\n  if (!feedback) {\n    out.status = 'NEED_EDIT';\n    out.approved = 'N';\n    out.ack = `Feedback missing. Use: edit ${row.lead_id} <feedback>`;\n  } else {\n    const updatedDraft = await rewriteDraft(String(row.draft_message || ''), feedback);\n    out.status = 'NEED_APPROVAL';\n    out.approved = 'N';\n    out.approval_feedback = feedback;\n    out.draft_message = updatedDraft;\n    out.ack = `Rewrote draft for ${row.lead_id}. Please approve again.`;\n    out.needs_approval_post = true;\n    const target = out.telegram_username ? `@${String(out.telegram_username).replace(/^@/, '')}` : (out.telegram_chat_id || 'unknown_target');\n    out.ops_message = [\n      'Approval Required (Edited)',\n      `lead_id: ${safeText(out.lead_id, 120)}`,\n      `name: ${safeText(out.name || 'N/A', 120)}`,\n      `target: ${safeText(target, 120)}`,\n      `feedback: ${safeText(out.approval_feedback, 280)}`,\n      '',\n      'Draft:',\n      safeText(out.draft_message, 520),\n      '',\n      `Text commands: approve ${safeText(out.lead_id, 120)} | edit ${safeText(out.lead_id, 120)} <feedback> | skip ${safeText(out.lead_id, 120)} | dnc ${safeText(out.lead_id, 120)}`,\n    ].join('\\n');\n    out.cb_approve = `approve:${leadToken}`;\n    out.cb_edit = `edit:${leadToken}`;\n    out.cb_skip = `skip:${leadToken}`;\n    out.cb_dnc = `dnc:${leadToken}`;\n  }\n}\n\nreturn [{ json: out }];\n"
       },
       "id": "b_apply_ops_action",
       "name": "Apply Ops Action",
@@ -905,6 +906,86 @@
         840,
         360
       ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.is_lead_action || false}}",
+              "operation": "isTrue"
+            }
+          ]
+        }
+      },
+      "id": "b_if_has_lead_action",
+      "name": "Has Lead Action?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        900,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.should_upsert || false}}",
+              "operation": "isTrue"
+            }
+          ]
+        }
+      },
+      "id": "b_if_should_upsert_action",
+      "name": "Should Upsert Action?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1360,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.callback_id || \"\"}}",
+              "operation": "notEmpty"
+            }
+          ]
+        }
+      },
+      "id": "b_if_has_callback",
+      "name": "Has Callback?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1360,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.lead_id || \"\"}}",
+              "operation": "notEmpty"
+            }
+          ]
+        }
+      },
+      "id": "b_if_known_lead_match",
+      "name": "Known Lead Match?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1130,
+        700
+      ]
     }
   ],
   "connections": {
@@ -1021,9 +1102,7 @@
             "node": "Upsert Lead After Send",
             "type": "main",
             "index": 0
-          }
-        ],
-        [
+          },
           {
             "node": "Notify Ops Send Failure",
             "type": "main",
@@ -1054,7 +1133,7 @@
         ],
         [
           {
-            "node": "Lookup Lead By lead_id",
+            "node": "Has Lead Action?",
             "type": "main",
             "index": 0
           }
@@ -1087,7 +1166,7 @@
       "main": [
         [
           {
-            "node": "Upsert Lead (Action)",
+            "node": "Should Upsert Action?",
             "type": "main",
             "index": 0
           },
@@ -1095,16 +1174,12 @@
             "node": "Needs Re-Approval Card?",
             "type": "main",
             "index": 0
-          }
-        ],
-        [
+          },
           {
-            "node": "Answer Callback Query",
+            "node": "Has Callback?",
             "type": "main",
             "index": 0
-          }
-        ],
-        [
+          },
           {
             "node": "Send Action Ack",
             "type": "main",
@@ -1169,14 +1244,7 @@
       "main": [
         [
           {
-            "node": "Upsert Lead (Inbound)",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Notify Ops Reply",
+            "node": "Known Lead Match?",
             "type": "main",
             "index": 0
           }
@@ -1276,6 +1344,65 @@
         [
           {
             "node": "Parse Ops Action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Lead Action?": {
+      "main": [
+        [
+          {
+            "node": "Lookup Lead By lead_id",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Should Upsert Action?": {
+      "main": [
+        [
+          {
+            "node": "Upsert Lead (Action)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Has Callback?": {
+      "main": [
+        [
+          {
+            "node": "Answer Callback Query",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Known Lead Match?": {
+      "main": [
+        [
+          {
+            "node": "Upsert Lead (Inbound)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Notify Ops Reply",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Respond 200",
             "type": "main",
             "index": 0
           }
