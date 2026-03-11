@@ -305,36 +305,15 @@
     },
     {
       "parameters": {
-        "jsCode": "const item = $json || {};\nconst allowedChatId = String($env.OPS_CHAT_ID || '').trim();\nlet action = '';\nlet leadId = '';\nlet feedback = '';\nlet actor = '';\nlet chatId = '';\nlet callbackId = '';\n\nfunction extractLeadIdFromCard(text) {\n  const t = String(text || '');\n  const m = t.match(/lead_id:\\s*([^\\n]+)/i);\n  if (!m) return '';\n  return String(m[1] || '').trim().split(/\\s+/)[0].replace(/[^A-Za-z0-9_-]/g, '') || '';\n}\n\nif (item.callback_query) {\n  const data = String(item.callback_query.data || '').trim();\n  const parts = data.split(':');\n  action = String(parts.shift() || '').toLowerCase();\n  leadId = String(parts.join(':') || '').trim();\n  if (!leadId) leadId = extractLeadIdFromCard(item.callback_query.message?.text || '');\n  actor = String(item.callback_query.from?.username || item.callback_query.from?.id || 'unknown');\n  chatId = String(item.callback_query.message?.chat?.id || '');\n  callbackId = String(item.callback_query.id || '');\n  if (action === 'edit') action = 'edit_request';\n} else if (item.message) {\n  const text = String(item.message.text || '').trim();\n  actor = String(item.message.from?.username || item.message.from?.id || 'unknown');\n  chatId = String(item.message.chat?.id || '');\n  const low = text.toLowerCase();\n  if (low === '/draftnow' || low === 'draftnow') {\n    action = 'draftnow';\n  } else {\n    const m = text.match(/^\\/?(approve|edit|skip|dnc)\\s+([^\\s]+)\\s*(.*)$/i);\n    if (m) {\n      action = String(m[1] || '').toLowerCase();\n      leadId = String(m[2] || '').trim();\n      feedback = String(m[3] || '').trim();\n      if (action === 'edit' && !feedback) action = 'edit_request';\n      else if (action === 'edit' && feedback) action = 'edit_feedback';\n    }\n  }\n}\n\nif (allowedChatId && chatId && chatId !== allowedChatId) {\n  action = '';\n  leadId = '';\n  feedback = '';\n}\n\nconst leadActions = new Set(['approve', 'skip', 'dnc', 'edit_request', 'edit_feedback']);\nconst isDraftNow = action === 'draftnow';\nconst isLeadAction = leadActions.has(action) && !!leadId;\n\nreturn [{\n  json: {\n    action,\n    lead_id: leadId,\n    feedback,\n    actor,\n    chat_id: chatId,\n    callback_id: callbackId,\n    is_draftnow: isDraftNow,\n    is_lead_action: isLeadAction,\n  }\n}];\n"
+        "jsCode": "const item = $json || {};\nconst allowedChatId = String($env.OPS_CHAT_ID || '').trim();\nlet action = '';\nlet leadId = '';\nlet feedback = '';\nlet actor = '';\nlet chatId = '';\nlet callbackId = '';\nlet rawText = '';\nconst updateId = Number(item.update_id || 0) || 0;\n\nfunction extractLeadIdFromCard(text) {\n  const t = String(text || '');\n  const m = t.match(/lead_id:\\s*([^\\n]+)/i);\n  if (!m) return '';\n  return String(m[1] || '').trim().split(/\\s+/)[0].replace(/[^A-Za-z0-9_-]/g, '') || '';\n}\n\nif (item.callback_query) {\n  const data = String(item.callback_query.data || '').trim();\n  const parts = data.split(':');\n  action = String(parts.shift() || '').toLowerCase();\n  leadId = String(parts.join(':') || '').trim();\n  if (!leadId) leadId = extractLeadIdFromCard(item.callback_query.message?.text || '');\n  actor = String(item.callback_query.from?.username || item.callback_query.from?.id || 'unknown');\n  chatId = String(item.callback_query.message?.chat?.id || '');\n  callbackId = String(item.callback_query.id || '');\n  rawText = String(item.callback_query.message?.text || '');\n  if (action === 'edit') action = 'edit_request';\n} else if (item.message) {\n  const text = String(item.message.text || '').trim();\n  rawText = text;\n  actor = String(item.message.from?.username || item.message.from?.id || 'unknown');\n  chatId = String(item.message.chat?.id || '');\n  const low = text.toLowerCase();\n  if (low === '/draftnow' || low === 'draftnow') {\n    action = 'draftnow';\n  } else {\n    const m = text.match(/^\\/?(approve|edit|skip|dnc)\\s+([^\\s]+)\\s*(.*)$/i);\n    if (m) {\n      action = String(m[1] || '').toLowerCase();\n      leadId = String(m[2] || '').trim();\n      feedback = String(m[3] || '').trim();\n      if (action === 'edit' && !feedback) action = 'edit_request';\n      else if (action === 'edit' && feedback) action = 'edit_feedback';\n    }\n  }\n}\n\nif (allowedChatId && chatId && chatId !== allowedChatId) {\n  action = '';\n  leadId = '';\n  feedback = '';\n}\n\nconst leadActions = new Set(['approve', 'skip', 'dnc', 'edit_request', 'edit_feedback']);\nconst isDraftNow = action === 'draftnow';\nconst isLeadAction = leadActions.has(action) && !!leadId;\n\nreturn [{\n  json: {\n    update_id: updateId,\n    action,\n    lead_id: leadId,\n    feedback,\n    actor,\n    chat_id: chatId,\n    callback_id: callbackId,\n    raw_text: rawText,\n    is_draftnow: isDraftNow,\n    is_lead_action: isLeadAction,\n  }\n}];"
       },
       "id": "b_parse_ops_action",
       "name": "Parse Ops Action",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        430,
-        420
-      ]
-    },
-    {
-      "parameters": {
-        "conditions": {
-          "string": [
-            {
-              "value1": "={{$json.action}}",
-              "operation": "equals",
-              "value2": "draftnow"
-            }
-          ]
-        }
-      },
-      "id": "b_if_draftnow",
-      "name": "Draft Now?",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2,
-      "position": [
-        670,
-        420
+        1280,
+        360
       ]
     },
     {
@@ -421,7 +400,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const stateRow = items[0]?.json || {};\nconst paired = items[0]?.pairedItem;\nconst pairedIndex = (paired && typeof paired.item === 'number') ? paired.item : 0;\nconst cmd = $items('Parse Ops Action', 0, 0)[pairedIndex]?.json || {};\nconst leadRow = $items('Lookup Lead By lead_id', 0, 0)[pairedIndex]?.json || {};\n\nif (!cmd.is_lead_action || !cmd.lead_id) return [];\n\nconst safeText = (v, max = 300) => String(v ?? '').replace(/[\\u0000-\\u001F\\u007F]/g, ' ').replace(/[<>]/g, '').replace(/\\s+/g, ' ').trim().slice(0, max);\nconst leadToken = String(cmd.lead_id).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 48);\nconst nowIso = new Date().toISOString();\n\nif (!leadRow.lead_id) {\n  return [{ json: {\n    action: cmd.action,\n    lead_id: cmd.lead_id,\n    callback_id: cmd.callback_id,\n    should_upsert_lead: false,\n    should_upsert_state: false,\n    needs_approval_post: false,\n    ack: `Lead ${cmd.lead_id} not found.`,\n    audit_event_at: nowIso,\n    audit_event_type: 'ops_not_found',\n    audit_actor: cmd.actor || 'ops',\n    audit_details: `Lead ${cmd.lead_id} not found`,\n  } }];\n}\n\nconst apiKey = String($env.OPENAI_API_KEY || '').trim();\nconst systemPrompt = String($env.OUTREACH_SYSTEM_PROMPT || '').trim() || 'Write concise human Telegram outreach. Do not invent facts.';\nasync function rewriteDraft(existingDraft, feedback) {\n  if (!apiKey || apiKey.startsWith('replace-with-')) return existingDraft;\n  const ctl = new AbortController();\n  const t = setTimeout(() => ctl.abort(), 20000);\n  try {\n    const userPrompt = `Rewrite this Telegram outreach draft using the feedback. Keep under 450 chars. One question max. No hallucinations.\\nDraft: ${existingDraft}\\nFeedback: ${feedback}`;\n    const res = await fetch('https://api.openai.com/v1/chat/completions', {\n      method: 'POST',\n      signal: ctl.signal,\n      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },\n      body: JSON.stringify({\n        model: 'gpt-4o-mini',\n        temperature: 0.5,\n        messages: [\n          { role: 'system', content: systemPrompt },\n          { role: 'user', content: userPrompt },\n        ],\n      }),\n    });\n    if (!res.ok) throw new Error('rewrite_http');\n    const data = await res.json();\n    const msg = String(data?.choices?.[0]?.message?.content || '').replace(/\\s+/g, ' ').trim();\n    return (msg || existingDraft).slice(0, 450);\n  } catch {\n    return existingDraft;\n  } finally {\n    clearTimeout(t);\n  }\n}\n\nconst out = {\n  lead_id: String(leadRow.lead_id || cmd.lead_id),\n  name: String(leadRow.name || ''),\n  telegram_username: String(leadRow.telegram_username || '').replace(/^@/, ''),\n  company: String(leadRow.company || ''),\n  role: String(leadRow.role || ''),\n  source_url: String(leadRow.source_url || ''),\n  status: String(leadRow.status || 'NEW'),\n  last_contacted_at: String(leadRow.last_contacted_at || ''),\n  next_followup_at: String(leadRow.next_followup_at || ''),\n  followup_count: Number(leadRow.followup_count || 0),\n\n  telegram_chat_id: String(stateRow.telegram_chat_id || ''),\n  draft_message: String(stateRow.draft_message || ''),\n  research_snippet: String(stateRow.research_snippet || ''),\n  memory_summary: String(stateRow.memory_summary || ''),\n  approval_feedback: String(stateRow.approval_feedback || ''),\n  last_reply_received: String(stateRow.last_reply_received || ''),\n  last_reply_at: String(stateRow.last_reply_at || ''),\n  last_idempotency_key: String(stateRow.last_idempotency_key || ''),\n  last_sent_type: String(stateRow.last_sent_type || ''),\n  last_error: String(stateRow.last_error || ''),\n  last_error_at: String(stateRow.last_error_at || ''),\n  message_history: String(stateRow.message_history || ''),\n  updated_at: nowIso,\n\n  action: cmd.action,\n  callback_id: cmd.callback_id,\n  should_upsert_lead: true,\n  should_upsert_state: true,\n  needs_approval_post: false,\n  ack: '',\n  audit_event_at: nowIso,\n  audit_event_type: `ops_${cmd.action}`,\n  audit_actor: cmd.actor || 'ops',\n  audit_details: '',\n};\n\nif (cmd.action === 'approve') {\n  out.status = 'APPROVED';\n  out.ack = `Approved ${out.lead_id}.`;\n}\nif (cmd.action === 'skip') {\n  const next = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();\n  out.status = 'FOLLOWUP_DUE';\n  out.next_followup_at = next;\n  out.ack = `Skipped ${out.lead_id} for now. Revisit tomorrow.`;\n}\nif (cmd.action === 'dnc') {\n  out.status = 'DNC';\n  out.ack = `Marked ${out.lead_id} as DNC.`;\n}\nif (cmd.action === 'edit_request') {\n  out.status = 'NEEDS_APPROVAL';\n  out.ack = `Send feedback using: edit ${out.lead_id} <feedback>`;\n}\nif (cmd.action === 'edit_feedback') {\n  const feedback = String(cmd.feedback || '').trim();\n  if (!feedback) {\n    out.status = 'NEEDS_APPROVAL';\n    out.ack = `Feedback missing. Use: edit ${out.lead_id} <feedback>`;\n  } else {\n    const updatedDraft = await rewriteDraft(out.draft_message, feedback);\n    out.status = 'NEEDS_APPROVAL';\n    out.approval_feedback = feedback;\n    out.draft_message = updatedDraft;\n    out.needs_approval_post = true;\n    out.ack = `Rewrote draft for ${out.lead_id}. Please approve again.`;\n    out.ops_message = [\n      'Approval Required (Edited)',\n      `lead_id: ${safeText(out.lead_id, 120)}`,\n      `name: ${safeText(out.name || 'N/A', 120)}`,\n      `target: @${safeText(out.telegram_username, 120)}`,\n      `feedback: ${safeText(out.approval_feedback, 280)}`,\n      '',\n      'Draft:',\n      safeText(out.draft_message, 520),\n      '',\n      `Text commands: approve ${safeText(out.lead_id, 120)} | edit ${safeText(out.lead_id, 120)} <feedback> | skip ${safeText(out.lead_id, 120)} | dnc ${safeText(out.lead_id, 120)}`,\n    ].join('\\n');\n    out.cb_approve = `approve:${leadToken}`;\n    out.cb_edit = `edit:${leadToken}`;\n    out.cb_skip = `skip:${leadToken}`;\n    out.cb_dnc = `dnc:${leadToken}`;\n  }\n}\n\nout.audit_details = out.ack;\nreturn [{ json: out }];"
+        "jsCode": "const stateRow = items[0]?.json || {};\nconst paired = items[0]?.pairedItem;\nconst pairedIndex = (paired && typeof paired.item === 'number') ? paired.item : 0;\nconst cmd = $items('Parse Ops Action', 0, 0)[pairedIndex]?.json || {};\nconst leadRow = $items('Lookup Lead By lead_id', 0, 0)[pairedIndex]?.json || {};\n\nif (!cmd.is_lead_action || !cmd.lead_id) return [];\n\nconst safeText = (v, max = 300) => String(v ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/[<>]/g, '').replace(/\\s+/g, ' ').trim().slice(0, max);\nconst leadToken = String(cmd.lead_id).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 48);\nconst nowIso = new Date().toISOString();\nconst updateId = Number(cmd.update_id || 0) || 0;\n\nif (!leadRow.lead_id) {\n  return [{ json: {\n    action: cmd.action,\n    lead_id: cmd.lead_id,\n    callback_id: cmd.callback_id,\n    update_id: updateId,\n    should_upsert_lead: false,\n    should_upsert_state: false,\n    needs_approval_post: false,\n    ack: `Lead ${cmd.lead_id} not found.`,\n    audit_event_at: nowIso,\n    audit_event_type: 'ops_not_found',\n    audit_actor: cmd.actor || 'ops',\n    audit_details: `update_id:${updateId} | Lead ${cmd.lead_id} not found`,\n  } }];\n}\n\nconst apiKey = String($env.OPENAI_API_KEY || '').trim();\nconst systemPrompt = String($env.OUTREACH_SYSTEM_PROMPT || '').trim() || 'Write concise human Telegram outreach. Do not invent facts.';\nasync function rewriteDraft(existingDraft, feedback) {\n  if (!apiKey || apiKey.startsWith('replace-with-')) return existingDraft;\n  const ctl = new AbortController();\n  const t = setTimeout(() => ctl.abort(), 20000);\n  try {\n    const userPrompt = `Rewrite this Telegram outreach draft using the feedback. Keep under 450 chars. One question max. No hallucinations.\nDraft: ${existingDraft}\nFeedback: ${feedback}`;\n    const res = await fetch('https://api.openai.com/v1/chat/completions', {\n      method: 'POST',\n      signal: ctl.signal,\n      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },\n      body: JSON.stringify({\n        model: 'gpt-4o-mini',\n        temperature: 0.5,\n        messages: [\n          { role: 'system', content: systemPrompt },\n          { role: 'user', content: userPrompt },\n        ],\n      }),\n    });\n    if (!res.ok) throw new Error('rewrite_http');\n    const data = await res.json();\n    const msg = String(data?.choices?.[0]?.message?.content || '').replace(/\\s+/g, ' ').trim();\n    return (msg || existingDraft).slice(0, 450);\n  } catch {\n    return existingDraft;\n  } finally {\n    clearTimeout(t);\n  }\n}\n\nconst out = {\n  lead_id: String(leadRow.lead_id || cmd.lead_id),\n  name: String(leadRow.name || ''),\n  telegram_username: String(leadRow.telegram_username || '').replace(/^@/, ''),\n  company: String(leadRow.company || ''),\n  role: String(leadRow.role || ''),\n  source_url: String(leadRow.source_url || ''),\n  status: String(leadRow.status || 'NEW'),\n  last_contacted_at: String(leadRow.last_contacted_at || ''),\n  next_followup_at: String(leadRow.next_followup_at || ''),\n  followup_count: Number(leadRow.followup_count || 0),\n\n  telegram_chat_id: String(stateRow.telegram_chat_id || ''),\n  draft_message: String(stateRow.draft_message || ''),\n  research_snippet: String(stateRow.research_snippet || ''),\n  memory_summary: String(stateRow.memory_summary || ''),\n  approval_feedback: String(stateRow.approval_feedback || ''),\n  last_reply_received: String(stateRow.last_reply_received || ''),\n  last_reply_at: String(stateRow.last_reply_at || ''),\n  last_idempotency_key: String(stateRow.last_idempotency_key || ''),\n  last_sent_type: String(stateRow.last_sent_type || ''),\n  last_error: String(stateRow.last_error || ''),\n  last_error_at: String(stateRow.last_error_at || ''),\n  message_history: String(stateRow.message_history || ''),\n  updated_at: nowIso,\n\n  action: cmd.action,\n  callback_id: cmd.callback_id,\n  update_id: updateId,\n  should_upsert_lead: true,\n  should_upsert_state: true,\n  needs_approval_post: false,\n  ack: '',\n  audit_event_at: nowIso,\n  audit_event_type: `ops_${cmd.action}`,\n  audit_actor: cmd.actor || 'ops',\n  audit_details: '',\n};\n\nif (cmd.action === 'approve') {\n  out.status = 'APPROVED';\n  out.ack = `Approved ${out.lead_id}.`;\n}\nif (cmd.action === 'skip') {\n  const next = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();\n  out.status = 'FOLLOWUP_DUE';\n  out.next_followup_at = next;\n  out.ack = `Skipped ${out.lead_id} for now. Revisit tomorrow.`;\n}\nif (cmd.action === 'dnc') {\n  out.status = 'DNC';\n  out.ack = `Marked ${out.lead_id} as DNC.`;\n}\nif (cmd.action === 'edit_request') {\n  out.status = 'NEEDS_APPROVAL';\n  out.ack = `Send feedback using: edit ${out.lead_id} <feedback>`;\n}\nif (cmd.action === 'edit_feedback') {\n  const feedback = String(cmd.feedback || '').trim();\n  if (!feedback) {\n    out.status = 'NEEDS_APPROVAL';\n    out.ack = `Feedback missing. Use: edit ${out.lead_id} <feedback>`;\n  } else {\n    const updatedDraft = await rewriteDraft(out.draft_message, feedback);\n    out.status = 'NEEDS_APPROVAL';\n    out.approval_feedback = feedback;\n    out.draft_message = updatedDraft;\n    out.needs_approval_post = true;\n    out.ack = `Rewrote draft for ${out.lead_id}. Please approve again.`;\n    out.ops_message = [\n      'Approval Required (Edited)',\n      `lead_id: ${safeText(out.lead_id, 120)}`,\n      `name: ${safeText(out.name || 'N/A', 120)}`,\n      `target: @${safeText(out.telegram_username, 120)}`,\n      `feedback: ${safeText(out.approval_feedback, 280)}`,\n      '',\n      'Draft:',\n      safeText(out.draft_message, 520),\n      '',\n      `Text commands: approve ${safeText(out.lead_id, 120)} | edit ${safeText(out.lead_id, 120)} <feedback> | skip ${safeText(out.lead_id, 120)} | dnc ${safeText(out.lead_id, 120)}`,\n    ].join('\\n');\n    out.cb_approve = `approve:${leadToken}`;\n    out.cb_edit = `edit:${leadToken}`;\n    out.cb_skip = `skip:${leadToken}`;\n    out.cb_dnc = `dnc:${leadToken}`;\n  }\n}\n\nout.audit_details = `update_id:${updateId} | ${out.ack}`;\nreturn [{ json: out }];"
       },
       "id": "b_apply_ops_action",
       "name": "Apply Ops Action",
@@ -807,16 +786,35 @@
     },
     {
       "parameters": {
-        "jsCode": "const state = $getWorkflowStaticData('global');\nconst offset = Number(state.ops_update_offset || 0);\nreturn [{ json: { offset } }];"
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "mode": "id",
+          "value": "={{$env.GSHEET_ID}}"
+        },
+        "sheetName": {
+          "mode": "name",
+          "value": "OpsAudit"
+        },
+        "options": {
+          "returnAll": true
+        }
       },
       "id": "b_load_ops_offset",
-      "name": "Load Ops Offset",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
+      "name": "Read OpsAudit (Poll)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
       "position": [
         400,
         360
-      ]
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "U9w1TzdWoAPa4Xhs",
+          "name": "Google Sheets"
+        }
+      },
+      "alwaysOutputData": true
     },
     {
       "parameters": {
@@ -848,41 +846,21 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        620,
-        360
-      ]
-    },
-    {
-      "parameters": {
-        "jsCode": "const state = $getWorkflowStaticData('global');\nconst payload = items[0]?.json || {};\nconst updates = Array.isArray(payload.result) ? payload.result : [];\nif (updates.length) {\n  const maxId = Math.max(...updates.map(u => Number(u.update_id || 0)));\n  if (Number.isFinite(maxId) && maxId > 0) state.ops_update_offset = maxId + 1;\n}\nreturn updates.map(u => ({ json: u }));"
-      },
-      "id": "b_expand_ops_updates",
-      "name": "Expand Ops Updates",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
         840,
         360
       ]
     },
     {
       "parameters": {
-        "conditions": {
-          "boolean": [
-            {
-              "value1": "={{$json.is_lead_action || false}}",
-              "operation": "isTrue"
-            }
-          ]
-        }
+        "jsCode": "const payload = items[0]?.json || {};\nconst updates = Array.isArray(payload.result) ? payload.result : [];\nreturn updates.map((u) => ({ json: u }));"
       },
-      "id": "b_if_has_lead_action",
-      "name": "Has Lead Action?",
-      "type": "n8n-nodes-base.if",
+      "id": "b_expand_ops_updates",
+      "name": "Expand Ops Updates",
+      "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        900,
-        420
+        1060,
+        360
       ]
     },
     {
@@ -1295,6 +1273,58 @@
           "name": "Google Sheets"
         }
       }
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = items.map((i) => i.json || {});\nlet maxId = 0;\nfor (const row of rows) {\n  const text = String(row.details || '');\n  const match = text.match(/update_id:(\\d+)/i);\n  if (!match) continue;\n  const value = Number(match[1] || 0);\n  if (Number.isFinite(value) && value > maxId) maxId = value;\n}\nreturn [{ json: { offset: maxId > 0 ? maxId + 1 : 0 } }];"
+      },
+      "id": "b_build_ops_offset",
+      "name": "Build Ops Offset",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        620,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "if ($json.action !== 'draftnow') return [];\nconst nowIso = new Date().toISOString();\nreturn [{\n  json: {\n    ...$json,\n    audit_event_at: nowIso,\n    audit_event_type: 'ops_draftnow',\n    audit_actor: $json.actor || 'ops',\n    audit_details: `update_id:${$json.update_id || 0} | Draft workflow triggered.`,\n  }\n}];"
+      },
+      "id": "b_filter_draft_now",
+      "name": "Filter Draft Now",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1500,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "if (!$json.is_lead_action || !$json.lead_id) return [];\nreturn items;"
+      },
+      "id": "b_filter_lead_action",
+      "name": "Filter Lead Action",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1500,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "if ($json.action === 'draftnow') return [];\nif ($json.is_lead_action && $json.lead_id) return [];\nconst nowIso = new Date().toISOString();\nconst trimmed = String($json.raw_text || '').replace(/\\s+/g, ' ').trim().slice(0, 180);\nreturn [{\n  json: {\n    lead_id: '',\n    audit_event_at: nowIso,\n    audit_event_type: 'ops_ignored',\n    audit_actor: $json.actor || 'ops',\n    audit_details: `update_id:${$json.update_id || 0} | Ignored bot update${trimmed ? ` | ${trimmed}` : ''}`,\n  }\n}];"
+      },
+      "id": "b_filter_ignored_ops_update",
+      "name": "Filter Ignored Ops Update",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1500,
+        600
+      ]
     }
   ],
   "connections": {
@@ -1434,25 +1464,17 @@
       "main": [
         [
           {
-            "node": "Draft Now?",
+            "node": "Filter Draft Now",
             "type": "main",
             "index": 0
-          }
-        ]
-      ]
-    },
-    "Draft Now?": {
-      "main": [
-        [
+          },
           {
-            "node": "Trigger Draft Workflow A",
+            "node": "Filter Lead Action",
             "type": "main",
             "index": 0
-          }
-        ],
-        [
+          },
           {
-            "node": "Has Lead Action?",
+            "node": "Filter Ignored Ops Update",
             "type": "main",
             "index": 0
           }
@@ -1639,18 +1661,7 @@
       "main": [
         [
           {
-            "node": "Load Ops Offset",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Load Ops Offset": {
-      "main": [
-        [
-          {
-            "node": "Fetch Ops Bot Updates",
+            "node": "Read OpsAudit (Poll)",
             "type": "main",
             "index": 0
           }
@@ -1677,18 +1688,6 @@
             "index": 0
           }
         ]
-      ]
-    },
-    "Has Lead Action?": {
-      "main": [
-        [
-          {
-            "node": "Lookup Lead By lead_id",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        []
       ]
     },
     "Should Upsert Action?": {
@@ -1793,6 +1792,66 @@
         [
           {
             "node": "Build Daily Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read OpsAudit (Poll)": {
+      "main": [
+        [
+          {
+            "node": "Build Ops Offset",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Ops Offset": {
+      "main": [
+        [
+          {
+            "node": "Fetch Ops Bot Updates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Draft Now": {
+      "main": [
+        [
+          {
+            "node": "Trigger Draft Workflow A",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Append Ops Audit (Action)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Lead Action": {
+      "main": [
+        [
+          {
+            "node": "Lookup Lead By lead_id",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Ignored Ops Update": {
+      "main": [
+        [
+          {
+            "node": "Append Ops Audit (Action)",
             "type": "main",
             "index": 0
           }
